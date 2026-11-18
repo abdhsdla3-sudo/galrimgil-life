@@ -14,6 +14,7 @@ const TYPE_COLOR = {
   card: '#e7defc', allowance: '#fff2b3', payday: '#ffe08a', job: '#d6e4f0', love: '#ffd6e5', shop: '#d7f0ea', together: '#ffe0b3', island: '#bfe9ef', gate: '#f2c9a0', goal: '#ffd36b',
 };
 const STAGE_BG = { growth: '#eaf6e3', early: '#fff1df', late: '#eee8fb' };
+const STAGE_INK = { growth: '#35634c', early: '#854821', late: '#584476' };
 
 export class BoardView {
   constructor(container, onNodeClick) {
@@ -26,20 +27,33 @@ export class BoardView {
     this.board = board;
     const svg = s('svg', { viewBox: `0 0 ${board.width} ${board.height}`, width: board.width, height: board.height, class: 'board-svg', role: 'img', 'aria-label': '게임 보드' });
     const nodes = Object.values(board.nodes);
+    svg.append(s('defs', {},
+      s('pattern', { id: 'board-grain', width: 16, height: 16, patternUnits: 'userSpaceOnUse' },
+        s('circle', { cx: 4, cy: 4, r: 1, fill: '#624c38', opacity: .15 })),
+    ));
     // 단계 배경
     const bands = {};
+    const labels = s('g', { class: 'stage-labels' });
+    const labelX = board.width / 2;
     for (const n of nodes) { const b = (bands[n.stage] ||= { minY: 1e9, maxY: -1e9 }); b.minY = Math.min(b.minY, n.y); b.maxY = Math.max(b.maxY, n.y); }
     for (const [st, b] of Object.entries(bands)) {
-      svg.append(s('rect', { x: 6, y: b.minY - 62, width: board.width - 12, height: b.maxY - b.minY + 124, rx: 22, fill: STAGE_BG[st], opacity: 0.55 }));
-      svg.append(s('text', { x: 18, y: b.minY - 44, class: 'stage-label' }, STAGES[st]));
+      const y = Math.max(0, b.minY - 76);
+      const band = { x: 6, y, width: board.width - 12, height: b.maxY + 72 - y, rx: 22 };
+      svg.append(s('rect', { ...band, fill: STAGE_BG[st], stroke: STAGE_INK[st], 'stroke-opacity': .36, 'stroke-width': 2 }));
+      svg.append(s('rect', { ...band, fill: 'url(#board-grain)' }));
+      labels.append(s('rect', { x: labelX - 50, y: y + 4, width: 100, height: 23, rx: 9, fill: STAGE_INK[st] }));
+      labels.append(s('text', { x: labelX, y: y + 21, class: 'stage-label' }, STAGES[st]));
     }
     // 연결선
+    const tracks = s('g', { class: 'tracks' });
     const edges = s('g', { class: 'edges' });
     for (const n of nodes) for (const t of n.next) {
       const m = board.nodes[t];
-      edges.append(s('line', { x1: n.x, y1: n.y, x2: m.x, y2: m.y, class: n.next.length > 1 ? 'edge fork' : 'edge' }));
+      const line = { x1: n.x, y1: n.y, x2: m.x, y2: m.y };
+      tracks.append(s('line', { ...line, class: n.next.length > 1 ? 'track fork' : 'track' }));
+      edges.append(s('line', { ...line, class: 'edge' }));
     }
-    svg.append(edges);
+    svg.append(tracks, edges, labels);
     // 칸
     this.nodeEls = {};
     const gN = s('g', { class: 'nodes' });
@@ -48,7 +62,9 @@ export class BoardView {
       const big = n.gate || n.type === 'start';
       const w = big ? 70 : 58, hh = big ? 62 : 54;
       const g = s('g', { class: `node t-${n.type}${n.stop ? ' stop' : ''}`, transform: `translate(${n.x},${n.y})`, tabindex: 0, 'data-id': n.id });
-      g.append(s('rect', { x: -w / 2, y: -hh / 2, width: w, height: hh, rx: 12, fill: TYPE_COLOR[n.type] }));
+      const tile = { x: -w / 2, y: -hh / 2, width: w, height: hh, rx: 12 };
+      g.append(s('rect', { ...tile, y: tile.y + 4, class: 'tile-base' }));
+      g.append(s('rect', { ...tile, fill: TYPE_COLOR[n.type], class: 'tile-face' }));
       g.append(s('text', { y: -4, class: 'node-icon' }, t.icon));
       g.append(s('text', { y: 18, class: 'node-name' }, n.label || t.name));
       if (n.stop) g.append(s('text', { y: -hh / 2 - 4, class: 'stop-tag' }, '정지'));
@@ -77,6 +93,13 @@ export class BoardView {
   layoutPawns(players, currentId) {
     const groups = {};
     for (const p of players) (groups[this.disp[p.id] ?? p.pos] ||= []).push(p);
+    const active = players.find(p => p.id === currentId && !p.finished);
+    const activeNode = active ? this.nodeEls[this.disp[active.id] ?? active.pos] : null;
+    if (this.activeNode !== activeNode) {
+      this.activeNode?.classList.remove('active');
+      activeNode?.classList.add('active');
+      this.activeNode = activeNode;
+    }
     for (const [nid, list] of Object.entries(groups)) {
       const n = this.board.nodes[nid];
       if (!n) continue;

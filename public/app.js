@@ -183,18 +183,50 @@ async function renderJoin(id) {
 // ---------- 실시간 연결 ----------
 function connect() {
   S.es?.close();
+  const receive = (room, close) => {
+    setConn(true);
+    if (room.version < S.lastVersion) return; // 순서가 뒤바뀐 오래된 상태 무시
+    S.lastVersion = room.version;
+    S.room = room;
+    if (!room.members.some(m => m.id === S.memberId)) { clearSeat(S.roomId); close(); return renderMissing('이 방에서 내보내졌거나 자리가 없어졌습니다.'); }
+    render();
+  };
+  if (document.querySelector('meta[name="room-sync"][content="poll"]')) {
+    const id = S.roomId;
+    let closed = false, timer;
+    const close = () => { closed = true; clearTimeout(timer); };
+    const poll = async () => {
+      try {
+        const room = await api(`/api/rooms/${id}/state`);
+        if (!closed) {
+          setConn(true);
+          const previous = S.room;
+          if (room.version !== previous?.version || room.members.some((m, i) => m.online !== previous.members[i]?.online)) {
+            receive(room, close);
+          }
+        }
+      } catch (e) {
+        if (closed) return;
+        setConn(false);
+        if ([401, 404, 410].includes(e.status)) {
+          if (e.status === 401) clearSeat(id);
+          close();
+          renderMissing(e.message);
+        }
+      } finally {
+        if (!closed) timer = setTimeout(poll, document.hidden ? 5000 : 1200);
+      }
+    };
+    S.es = { close };
+    void poll();
+    return;
+  }
   const es = new EventSource(`/api/rooms/${S.roomId}/stream?token=${encodeURIComponent(S.token)}`);
   S.es = es;
   let failures = 0;
   es.addEventListener('state', (ev) => {
     failures = 0;
-    setConn(true);
-    const room = JSON.parse(ev.data);
-    if (room.version < S.lastVersion) return; // 순서가 뒤바뀐 오래된 상태 무시
-    S.lastVersion = room.version;
-    S.room = room;
-    if (!room.members.some(m => m.id === S.memberId)) { clearSeat(S.roomId); es.close(); return renderMissing('이 방에서 내보내졌거나 자리가 없어졌습니다.'); }
-    render();
+    receive(JSON.parse(ev.data), () => es.close());
   });
   es.onerror = () => {
     setConn(false);

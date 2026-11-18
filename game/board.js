@@ -1,5 +1,6 @@
 // 보드 생성기: 설정과 시드로 결정적인 보드 그래프와 화면 좌표를 만든다.
 import { shuffle } from './rng.js';
+import { adultForkCount } from './settings.js';
 
 export const COLS = 11;
 export const CELL = 76;
@@ -85,7 +86,7 @@ export function buildBoard(settings, rng) {
   const adultStage = (stage, len) => {
     const types = bagFill(len, adultBag, 'payday', 5);
     const forkPoints = new Set();
-    const forkCount = Math.max(1, Math.floor(len / 14));
+    const forkCount = adultForkCount(len);
     for (let k = 1; k <= forkCount; k++) forkPoints.add(Math.floor((len * k) / (forkCount + 1)));
     let forkNo = 0;
     types.forEach((t, i) => {

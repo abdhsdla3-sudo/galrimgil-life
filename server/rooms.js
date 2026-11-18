@@ -31,14 +31,14 @@ export function cleanName(name) {
 
 export class RoomManager {
   constructor({ dataDir, now = () => Date.now(), onChange = () => {} }) {
-    this.dir = path.join(dataDir, 'rooms');
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.dir = dataDir ? path.join(dataDir, 'rooms') : null;
+    if (this.dir) fs.mkdirSync(this.dir, { recursive: true });
     this.rooms = new Map();
     this.broken = new Map(); // 불러오지 못한 방: id → 이유
     this.now = now;
     this.onChange = onChange;
     this.conn = new Map(); // roomId → Map(memberId → 연결 수)
-    this.load();
+    if (this.dir) this.load();
   }
 
   // ---------- 저장 ----------
@@ -59,6 +59,7 @@ export class RoomManager {
   }
   save(room) {
     room.updatedAt = this.now();
+    if (!this.dir) return;
     const file = path.join(this.dir, room.id + '.json');
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(room));
@@ -314,6 +315,7 @@ export class RoomManager {
   remove(id) {
     this.rooms.delete(id);
     this.conn.delete(id);
+    if (!this.dir) return;
     try { fs.unlinkSync(path.join(this.dir, id + '.json')); } catch { /* 이미 없음 */ }
   }
 }

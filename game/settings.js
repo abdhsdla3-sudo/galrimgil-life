@@ -6,9 +6,9 @@ export const TIME_LIMITS = [0, 30, 60, 120];
 export const SPEEDS = { slow: '느리게', normal: '보통', fast: '빠르게', instant: '즉시' };
 
 export const PRESETS = {
-  short: { name: '짧은 여정', settings: { startStage: 'adult', lengths: { growth: 12, early: 14, late: 14 }, packs: { extraJobs: false, special: false, joint: true, extra: false } } },
-  standard: { name: '기본 여정', settings: { startStage: 'growth', lengths: { growth: 14, early: 22, late: 20 }, packs: { extraJobs: true, special: false, joint: true, extra: true } } },
-  long: { name: '긴 여정', settings: { startStage: 'growth', lengths: { growth: 22, early: 32, late: 30 }, packs: { extraJobs: true, special: true, joint: true, extra: true } } },
+  short: { name: '짧은 여정', settings: { startStage: 'adult', lengths: { growth: 12, early: 16, late: 16 }, packs: { extraJobs: false, special: false, joint: true, extra: false } } },
+  standard: { name: '기본 여정', settings: { startStage: 'growth', lengths: { growth: 16, early: 25, late: 23 }, packs: { extraJobs: true, special: false, joint: true, extra: true } } },
+  long: { name: '긴 여정', settings: { startStage: 'growth', lengths: { growth: 25, early: 36, late: 34 }, packs: { extraJobs: true, special: true, joint: true, extra: true } } },
 };
 
 export function defaultSettings() {
@@ -54,13 +54,16 @@ export function presetSettings(key, base) {
   return normalizeSettings({ ...b, ...structuredClone(p.settings), preset: key });
 }
 
+export const adultForkCount = len => Math.max(1, Math.floor(len / 14));
+
 // 단계별 예상 턴 수(플레이어 1명 기준)
 export function stageTurns(settings) {
   const s = normalizeSettings(settings);
   const extra = s.packs.special ? 2 : 0; // 바람섬 우회로 선택 시
   const growth = s.startStage === 'growth' ? Math.ceil((s.lengths.growth + 4) / AVG_MOVE) : 0;
-  const early = Math.ceil((s.lengths.early + 8 + extra) / AVG_MOVE); // 진로 갈래길 + 관문
-  const late = Math.ceil((s.lengths.late + 2 + extra) / AVG_MOVE);
+  const career = s.startStage === 'growth' ? 7 : 0; // 진로 갈래길과 첫 직장
+  const early = Math.ceil((s.lengths.early + adultForkCount(s.lengths.early) * 3 + career + extra) / AVG_MOVE);
+  const late = Math.ceil((s.lengths.late + adultForkCount(s.lengths.late) * 3 + 2 + extra) / AVG_MOVE);
   return { growth, early, late, total: growth + early + late };
 }
 
