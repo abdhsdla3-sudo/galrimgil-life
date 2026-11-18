@@ -1,0 +1,18 @@
+# Render 블루프린트. 영구 디스크는 유료 인스턴스(Starter 이상)에서만 연결된다.
+services:
+  - type: web
+    name: galrimgil-life
+    runtime: node
+    plan: starter
+    buildCommand: "echo no build"
+    startCommand: "node server/index.js"
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: TRUST_PROXY
+        value: "1"
+    disk:
+      name: glg-data
+      mountPath: /var/data
+      sizeGB: 1

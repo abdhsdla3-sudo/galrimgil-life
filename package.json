@@ -1,0 +1,15 @@
+{
+  "name": "galrimgil-life",
+  "version": "0.1.0",
+  "private": true,
+  "description": "갈림길 인생 — 친구들과 링크로 함께하는 한국어 턴제 인생 보드게임",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js",
+    "lint": "node scripts/lint.js",
+    "check": "node scripts/lint.js && node --test test/*.test.js"
+  }
+}
