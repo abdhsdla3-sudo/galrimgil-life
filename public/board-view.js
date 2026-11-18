@@ -21,11 +21,12 @@ export class BoardView {
     this.container = container;
     this.onNodeClick = onNodeClick;
     this.disp = {}; // pid → 표시 위치
+    this.pos = {}; // pid → 말의 화면 좌표
     this.anim = Promise.resolve();
   }
   setBoard(board) {
     this.board = board;
-    const svg = s('svg', { viewBox: `0 0 ${board.width} ${board.height}`, width: board.width, height: board.height, class: 'board-svg', role: 'img', 'aria-label': '게임 보드' });
+    const svg = s('svg', { viewBox: `0 0 ${board.width} ${board.height}`, class: 'board-svg', role: 'img', 'aria-label': '게임 보드' });
     const nodes = Object.values(board.nodes);
     svg.append(s('defs', {},
       s('pattern', { id: 'board-grain', width: 16, height: 16, patternUnits: 'userSpaceOnUse' },
@@ -79,18 +80,40 @@ export class BoardView {
     }
     svg.append(gN);
     this.pawnLayer = s('g', { class: 'pawns' });
-    svg.append(this.pawnLayer);
+    this.fxLayer = s('g', { class: 'fx' });
+    svg.append(this.pawnLayer, this.fxLayer);
     this.container.replaceChildren(svg);
     this.svg = svg;
     this.pawns = {};
     this.disp = {};
+    this.labels = null;
+    this.fit();
+    if (!this.ro) { this.ro = new ResizeObserver(() => this.fit()); this.ro.observe(this.container); }
+  }
+  // 화면 크기에 맞춰 보드 크기 조절. 'all' 전체가 한눈에 | 'fit' 가로 맞춤 | 'big' 가로 맞춤의 1.6배
+  setZoom(mode) { this.zoom = mode; this.fit(); }
+  fit() {
+    if (!this.svg || !this.board) return;
+    const c = this.container;
+    c.classList.toggle('z-all', this.zoom === 'all');
+    const cw = c.clientWidth - 16, ch = c.clientHeight - 16;
+    if (cw <= 0) return;
+    const fitW = cw / this.board.width;
+    let k = fitW;
+    if (this.zoom === 'all') k = Math.min(fitW, ch / this.board.height);
+    else if (this.zoom === 'big') k = fitW * 1.6;
+    k = Math.max(0.3, Math.min(k, this.zoom === 'big' ? 3.2 : 2));
+    this.svg.style.width = Math.round(this.board.width * k) + 'px';
+    this.svg.style.height = Math.round(this.board.height * k) + 'px';
   }
   highlight(ids) {
     for (const el of Object.values(this.nodeEls || {})) el.classList.remove('hl');
     for (const id of ids || []) this.nodeEls?.[id]?.classList.add('hl');
   }
   // 같은 칸의 말들은 격자로 펼쳐 겹치지 않게 표시
-  layoutPawns(players, currentId) {
+  layoutPawns(players, currentId, meId = this.meId) {
+    this.meId = meId;
+    this.labels ||= pawnLabels(players);
     const groups = {};
     for (const p of players) (groups[this.disp[p.id] ?? p.pos] ||= []).push(p);
     const active = players.find(p => p.id === currentId && !p.finished);
@@ -103,26 +126,58 @@ export class BoardView {
     for (const [nid, list] of Object.entries(groups)) {
       const n = this.board.nodes[nid];
       if (!n) continue;
-      const cols = list.length <= 2 ? list.length : list.length <= 6 ? 3 : 4;
+      // 차례인 말을 맨 앞 줄에 둔다
+      list.sort((a, b) => (b.id === currentId) - (a.id === currentId));
+      const cols = list.length <= 3 ? list.length : list.length <= 6 ? 3 : 4;
+      const gap = list.length > 6 ? 19 : 24;
       list.forEach((p, i) => {
         const r = Math.floor(i / cols), c = i % cols;
-        const rowsN = Math.ceil(list.length / cols);
-        const x = n.x + (c - (Math.min(cols, list.length) - 1) / 2) * 15;
-        const y = n.y - 30 - (rowsN - 1 - r) * 15;
+        const inRow = Math.min(cols, list.length - r * cols);
+        const x = n.x + (c - (inRow - 1) / 2) * gap;
+        const y = n.y - 36 - r * (gap - 5);
         let el = this.pawns[p.id];
         if (!el) {
-          el = s('g', { class: 'pawn' });
-          el.append(s('circle', { r: 9, fill: p.color, stroke: '#fff', 'stroke-width': 2 }));
-          el.append(s('text', { y: 4, class: 'pawn-mark' }, p.mark));
-          el.append(s('title', {}, p.name));
+          const label = this.labels[p.id] || p.name.slice(0, 1);
+          el = s('g', { class: 'pawn' + (p.id === meId ? ' me' : ''), 'data-pid': p.id });
+          el.append(s('ellipse', { cx: 0, cy: 14, rx: 10, ry: 3.5, class: 'pawn-shadow' }));
+          el.append(s('circle', { r: 13, fill: p.color, class: 'pawn-body' }));
+          el.append(s('text', { y: label.length > 1 ? 3.5 : 5, class: 'pawn-mark' + (label.length > 1 ? ' two' : '') }, label));
+          if (p.id === meId) el.append(s('text', { x: 12, y: -7, class: 'pawn-me' }, '★'));
+          const name = p.id === meId ? `${p.name} (나)` : p.name;
+          const w = Math.max(36, [...name].length * 12 + 14);
+          el.append(s('g', { class: 'ptag', transform: 'translate(0,-22)' },
+            s('rect', { x: -w / 2, y: -17, width: w, height: 20, rx: 10, fill: p.color }),
+            s('text', { y: -2.5, class: 'ptag-text' }, name),
+            s('path', { d: 'M -5 3 L 5 3 L 0 8 Z', fill: p.color })));
+          el.append(s('title', {}, name));
+          el.addEventListener('mouseenter', () => this.pawnLayer.append(el));
           this.pawnLayer.append(el);
           this.pawns[p.id] = el;
         }
         el.setAttribute('transform', `translate(${x},${y})`);
         el.classList.toggle('current', p.id === currentId);
         el.classList.toggle('finished', !!p.finished);
+        this.pos[p.id] = { x, y };
       });
     }
+    // 차례인 말은 항상 맨 위에 그린다
+    const cur = this.pawns[currentId];
+    if (cur && this.pawnLayer.lastChild !== cur) this.pawnLayer.append(cur);
+  }
+  // 플레이어 목록에서 가리킨 말을 강조
+  spotlight(pid) {
+    for (const [id, el] of Object.entries(this.pawns || {})) el.classList.toggle('spot', id === pid);
+    if (pid && this.pawns?.[pid]) this.pawnLayer.append(this.pawns[pid]);
+  }
+  // 말 위로 떠오르는 글자 (돈 변화 등)
+  floatText(pid, text, kind, delay = 0) {
+    const at = this.pos?.[pid];
+    if (!at || !this.fxLayer) return;
+    setTimeout(() => {
+      const t = s('text', { x: at.x, y: at.y - 26, class: 'float-num ' + kind }, text);
+      this.fxLayer.append(t);
+      setTimeout(() => t.remove(), 2400);
+    }, delay);
   }
   // 이전 표시 위치에서 새 위치까지 길을 따라 이동 (BFS)
   pathBetween(from, to) {
@@ -142,10 +197,10 @@ export class BoardView {
       const from = this.disp[p.id] ?? p.pos;
       if (from === p.pos) continue;
       const path = stepMs > 0 ? this.pathBetween(from, p.pos) : [p.pos];
-      for (const nid of path) {
+      for (const [i, nid] of path.entries()) {
         this.disp[p.id] = nid;
         this.layoutPawns(players, currentId);
-        onStep?.(nid);
+        if (stepMs > 0) onStep?.(nid, path.length - 1 - i, p);
         if (stepMs > 0) await new Promise(r => setTimeout(r, stepMs));
       }
     }
@@ -157,8 +212,32 @@ export class BoardView {
     if (!n) return;
     const c = this.container;
     const scale = this.svg.getBoundingClientRect().width / this.board.width || 1;
-    c.scrollTo({ top: n.y * scale - c.clientHeight / 2, left: n.x * scale - c.clientWidth / 2, behavior: 'smooth' });
+    c.scrollTo({ top: this.svg.offsetTop + n.y * scale - c.clientHeight / 2, left: this.svg.offsetLeft + n.x * scale - c.clientWidth / 2, behavior: 'smooth' });
   }
+  // from 다음 칸부터 가장 가까운 type 칸까지의 칸 수
+  distanceTo(from, type) {
+    const seen = new Set([from]); let q = [from];
+    for (let d = 1; q.length && d < 120; d++) {
+      const nq = [];
+      for (const x of q) for (const y of this.board.nodes[x]?.next || []) {
+        if (seen.has(y)) continue;
+        if (this.board.nodes[y].type === type) return d;
+        seen.add(y); nq.push(y);
+      }
+      q = nq;
+    }
+    return null;
+  }
+}
+
+// 말에 쓰는 짧은 이름: 첫 글자, 겹치면 두 글자
+export function pawnLabels(players) {
+  const count = {};
+  for (const p of players) { const k = [...p.name][0] || '?'; count[k] = (count[k] || 0) + 1; }
+  return Object.fromEntries(players.map(p => {
+    const ch = [...p.name];
+    return [p.id, count[ch[0]] > 1 ? ch.slice(0, 2).join('') : (ch[0] || '?')];
+  }));
 }
 
 export function nodeInfo(board, n, players) {

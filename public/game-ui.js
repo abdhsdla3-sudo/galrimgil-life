@@ -1,44 +1,56 @@
 // 게임 진행 화면
 import { $, h, toast, modal, copyText, won, sign } from './util.js';
-import { BoardView, nodeInfo } from './board-view.js';
+import { BoardView, nodeInfo, pawnLabels, SPACE_HELP } from './board-view.js';
 import { JOBS, JOB_TYPE_NAMES, STATS, STAT_KEYS, STAT_MAX, STAGES, CARDS, STATUSES, ASSETS, SPACE_TYPES, JOB_CHANGE_COST } from '/game/content.js';
 import { progressInfo, netWorth, debtLimit, jobEligibility, xpThreshold, nextPlayerId } from '/game/engine.js';
 import { AVG_MOVE, SPEEDS } from '/game/settings.js';
 import { sfx, audioPrefs, setAudio } from './audio.js';
 
-const STEP_MS = { slow: 320, normal: 190, fast: 90, instant: 0 };
-const CARD_MS = { slow: 9000, normal: 6500, fast: 4000, instant: 2500 };
+const STEP_MS = { slow: 320, normal: 200, fast: 100, instant: 0 };
+const CARD_MS = { slow: 6500, normal: 4800, fast: 3200, instant: 2000 };
+const BANNER_MS = { slow: 1700, normal: 1300, fast: 900, instant: 700 };
 const PER_TURN = { slow: 35, normal: 25, fast: 18, instant: 14 };
 const REL = { single: '싱글', met: '알아가는 중', dating: '연애 중', married: '결혼' };
+const ZOOMS = { all: '전체', fit: '맞춤', big: '크게' };
+const STAT_SHORT = { smart: '지', body: '체', sense: '감', social: '사' };
 
 export class GameScreen {
   constructor(root, deps) {
     this.root = root; this.d = deps;
-    this.boardId = null; this.lastFeed = null; this.feedQueue = []; this.showingFeed = false;
-    this.turnMarks = []; this.lastTurnKey = null; this.logFilter = 'all';
-    this.speedLocal = (() => { try { return localStorage.getItem('glg.speed'); } catch { return null; } })();
+    this.boardId = null; this.lastFeed = null; this.feedQueue = []; this.showingFeed = null;
+    this.turnMarks = []; this.lastTurnKey = null; this.logFilter = 'all'; this.lastLogLen = null;
+    this.prevCash = null; this.animating = false; this.dialogMin = null;
+    this.speedLocal = load('glg.speed');
     this.build();
+    this.board.meId = this.me;
+    this.board.zoom = load('glg.zoom') || 'fit';
     this.timer = setInterval(() => this.tickTimer(), 500);
   }
-  destroy() { clearInterval(this.timer); document.querySelectorAll('.modal-back').forEach(m => m.remove()); }
+  destroy() { clearInterval(this.timer); this.board.ro?.disconnect(); document.querySelectorAll('.modal-back').forEach(m => m.remove()); }
   get me() { return this.d.S.memberId; }
   get speed() { return this.speedLocal || this.room?.settings.speed || 'normal'; }
 
   build() {
     this.top = h('header.gbar');
     this.boardBox = h('div.board-box');
-    this.feedBox = h('div.feed-stack');
+    this.hud = h('div.hud');
+    this.stepBadge = h('div.step-badge');
+    this.bannerBox = h('div.banner-layer');
+    this.feedBox = h('div.event-layer');
+    this.dialog = h('div.dialog-layer');
+    this.zoomBar = h('div.zoom-bar');
     this.actionBox = h('section.action');
     this.playersBox = h('section.players');
-    this.logBox = h('section.log');
+    this.logBox = h('aside.log');
     this.board = new BoardView(this.boardBox, (n) => modal(nodeInfo(this.g.board, n, this.g.players)));
     this.main = h('div.game',
       this.top,
-      h('div.game-body',
-        h('div.board-wrap', this.boardBox, this.feedBox),
-        h('aside.side', this.actionBox, this.playersBox)),
-      this.logBox);
+      this.body = h('div.game-body' + (load('glg.logClosed') === '1' ? '.log-closed' : ''),
+        this.logBox,
+        h('div.board-wrap', this.boardBox, this.hud, this.stepBadge, this.zoomBar, this.dialog, this.feedBox, this.bannerBox),
+        h('aside.side', this.actionBox, this.playersBox)));
     this.root.replaceChildren(this.main);
+    this.renderZoom();
   }
 
   async update(room) {
@@ -48,37 +60,66 @@ export class GameScreen {
       const { board } = await this.d.api(`/api/rooms/${room.id}/board`);
       this.boardId = room.boardId; this.boardData = board;
       this.board.setBoard(board);
-      this.lastFeed = null;
+      this.lastFeed = null; this.prevCash = null; this.lastLogLen = null;
     }
     if (this.room !== room) return; // 더 최신 상태가 이미 도착
     const g = { ...room.game, board: this.boardData };
     this.g = g;
+    this.labels = pawnLabels(g.players);
     document.title = `${g.phase === 'over' ? '결과' : `${g.round}라운드`} — 갈림길 인생`;
     const curId = g.pending?.pid || g.order[g.turnIdx];
+    const firstLoad = this.lastFeed === null;
     // 턴 소요 시간 측정 (남은 시간 보정용)
     const key = `${g.order[g.turnIdx]}:${g.round}`;
-    if (key !== this.lastTurnKey) {
+    const turnChanged = key !== this.lastTurnKey;
+    if (turnChanged) {
       this.turnMarks.push(Date.now()); if (this.turnMarks.length > 25) this.turnMarks.shift();
       if (this.lastTurnKey && g.order[g.turnIdx] === this.me && g.phase === 'play') { sfx('turn'); if (document.hidden) document.title = '🔔 내 차례! — 갈림길 인생'; }
       this.lastTurnKey = key;
     }
+    const newFeeds = firstLoad ? [] : g.feed.filter(f => f.seq > this.lastFeed);
+    this.lastFeed = g.feed.length ? g.feed[g.feed.length - 1].seq : 0;
+    const roll = g.lastRoll && g.lastRoll.seq !== this.lastRollSeq ? g.lastRoll : null;
+    const cashBefore = this.prevCash;
+    this.prevCash = Object.fromEntries(g.players.map(p => [p.id, p.cash]));
+    const moving = !firstLoad && g.players.some(p => (this.board.disp[p.id] ?? p.pos) !== p.pos) && STEP_MS[this.speed] > 0;
+
+    this.animating = moving;
     this.renderTop();
     this.renderPlayers();
     this.renderAction();
     this.renderLog();
-    // 말 이동 연출 후 결과 카드
-    const firstLoad = this.lastFeed === null;
-    const newFeeds = firstLoad ? [] : g.feed.filter(f => f.seq > this.lastFeed);
-    this.lastFeed = g.feed.length ? g.feed[g.feed.length - 1].seq : 0;
-    const roll = g.lastRoll && g.lastRoll.seq !== this.lastRollSeq ? g.lastRoll : null;
+    this.renderHud();
     if (roll && !firstLoad) { this.lastRollSeq = roll.seq; this.showDice(roll); }
     else if (roll) this.lastRollSeq = roll.seq;
-    this.animChain = (this.animChain || Promise.resolve()).then(() => this.board.animateTo(g.players, curId, firstLoad ? 0 : STEP_MS[this.speed], () => sfx('step')));
+    // 말 이동 연출 → 돈 변화 → 사건 카드 → 다음 차례 안내
+    // 창이 백그라운드이거나 밀린 연출이 있으면 이동 연출을 생략해 화면이 실제 진행을 따라가게 한다
+    this.animBacklog = (this.animBacklog || 0) + 1;
+    this.animChain = (this.animChain || Promise.resolve()).then(() => {
+      const fast = firstLoad || document.hidden || this.animBacklog > 1;
+      return this.board.animateTo(g.players, curId, fast ? 0 : STEP_MS[this.speed], (nid, left, p) => {
+        sfx('step');
+        this.showSteps(p, left);
+        this.board.scrollTo(nid);
+      });
+    }).finally(() => { this.animBacklog--; });
     await this.animChain;
+    this.showSteps(null);
+    if (this.room !== room) return;
+    if (this.animating) { this.animating = false; this.renderAction(); }
+    if (cashBefore) for (const p of g.players) {
+      const d = p.cash - (cashBefore[p.id] ?? p.cash);
+      if (d) this.board.floatText(p.id, `${d > 0 ? '+' : ''}${d}만`, d > 0 ? 'up' : 'down');
+    }
     if (firstLoad) this.board.scrollTo(P(g, curId)?.pos);
     for (const f of newFeeds) this.pushFeed(f);
-    if (g.phase === 'over' && !this.resultsShown) { this.resultsShown = true; this.showResults(); }
-    if (this.highlightTurn !== key && g.phase === 'play') { this.highlightTurn = key; this.board.scrollTo(P(g, g.order[g.turnIdx])?.pos); }
+    if (g.phase === 'over' && !this.resultsShown) { this.resultsShown = true; setTimeout(() => this.showResults(), firstLoad ? 0 : 1500); }
+    if (this.highlightTurn !== key && g.phase === 'play') {
+      this.highlightTurn = key;
+      const cur = P(g, g.order[g.turnIdx]);
+      this.board.scrollTo(cur?.pos);
+      if (!firstLoad && cur) this.showBanner(cur);
+    }
   }
 
   // ---------- 상단 ----------
@@ -87,26 +128,81 @@ export class GameScreen {
     const prog = progressInfo(g);
     const avgPct = Math.round(prog.reduce((a, x) => a + x.pct, 0) / prog.length);
     const cur = P(g, g.order[g.turnIdx]);
-    const nextId = nextPlayerId(g);
-    const nxt = nextId && nextId !== cur?.id ? P(g, nextId) : null;
     const remainTurns = prog.reduce((a, x) => a + (x.left > 0 ? x.left / AVG_MOVE : 0), 0);
     const per = this.observedPerTurn() ?? PER_TURN[this.speed];
     const remMin = Math.round(remainTurns * per / 60);
     const stage = cur ? STAGES[g.board.nodes[cur.pos].stage] : '';
-    put(this.top, 
+    const simul = g.pending?.kind === 'simul' && g.phase !== 'over';
+    const waiting = new Set(awaitingIds(g));
+    put(this.top,
       h('b.logo', '갈림길 인생'),
       g.phase === 'over' ? h('span.pill', '게임 종료') : h('span.pill', `${g.round}라운드 · ${stage}`),
-      g.phase === 'play' && cur ? h('span.turn', h('span.mk', { style: { background: cur.color } }, cur.mark), ` ${cur.name}${cur.id === this.me ? ' (나)' : ''} 차례`, nxt ? h('span.small', ` · 다음: ${nxt.name}`) : null) : null,
-      g.phase === 'prep' ? h('span.turn', '준비 단계 · 모두 동시에 선택') : null,
-      h('span.progress', { title: '모든 플레이어의 평균 진행률' }, h('span.bar', h('i', { style: { width: avgPct + '%' } })), ` ${avgPct}%`),
-      g.phase !== 'over' ? h('span.small', `남은 예상 약 ${Math.max(1, Math.round(remMin * 0.8))}~${Math.max(2, Math.round(remMin * 1.3))}분${this.observedPerTurn() ? ' (실측 보정)' : ''}`) : null,
+      // 차례 순서 줄: 지금 차례인 사람이 크게, 끝난 사람은 흐리게
+      h('div.order', { title: '차례 순서' }, ...g.order.map(id => {
+        const p = P(g, id);
+        const isCur = g.phase === 'play' && !simul && id === cur?.id;
+        return h('span.oslot' + (isCur ? '.cur' : '') + (p.finished ? '.done' : '') + (simul && waiting.has(id) ? '.wait' : ''),
+          { title: `${p.name}${id === this.me ? ' (나)' : ''}${p.finished ? ' · 은퇴' : ''}`, onmouseenter: () => this.board.spotlight(id), onmouseleave: () => this.board.spotlight(null), onclick: () => this.board.scrollTo(this.board.disp[id] ?? p.pos) },
+          this.avatar(p), isCur ? h('b.oname', id === this.me ? '내 차례' : `${p.name} 차례`) : null);
+      })),
+      simul ? h('span.turn-chip.all', `모두 선택 중 ${g.pending.who.length - waiting.size}/${g.pending.who.length}`) : null,
       this.timerEl = h('span.timer'),
       h('span.spacer'),
-      h('select.speed', { title: '내 화면의 연출 속도 (결과에는 영향 없음)', onchange: (e) => { this.speedLocal = e.target.value; try { localStorage.setItem('glg.speed', e.target.value); } catch { /* 무시 */ } } },
+      h('span.progress', { title: '모든 플레이어의 평균 진행률' }, h('span.bar', h('i', { style: { width: avgPct + '%' } })), ` ${avgPct}%`),
+      g.phase !== 'over' ? h('span.small', { title: this.observedPerTurn() ? '실제 차례 소요 시간으로 보정' : '' }, `남은 약 ${Math.max(1, Math.round(remMin * 0.8))}~${Math.max(2, Math.round(remMin * 1.3))}분`) : null,
+      h('select.speed', { title: '내 화면의 연출 속도 (결과에는 영향 없음)', onchange: (e) => { this.speedLocal = e.target.value; save('glg.speed', e.target.value); } },
         ...Object.entries(SPEEDS).map(([k, v]) => h('option', { value: k, selected: this.speed === k }, '연출: ' + v))),
       h('button.small', { onclick: () => this.menu() }, '메뉴'),
     );
     this.tickTimer();
+  }
+  renderZoom() {
+    put(this.zoomBar, h('span.small', '보드'), ...Object.entries(ZOOMS).map(([k, v]) => h('button.small' + (this.board.zoom === k ? '.on' : ''), {
+      onclick: () => { this.board.setZoom(k); save('glg.zoom', k); this.renderZoom(); const p = this.g && P(this.g, this.g.pending?.pid || this.g.order[this.g.turnIdx]); if (p) setTimeout(() => this.board.scrollTo(p.pos), 50); },
+    }, v)));
+  }
+  avatar(p, cls = '') {
+    return h('span.av' + cls, { style: { background: p.color } }, this.labels?.[p.id] || p.name.slice(0, 1));
+  }
+  // 보드 왼쪽 위: 지금 차례인 사람 정보
+  renderHud() {
+    const g = this.g, pd = g.pending;
+    if (!pd || g.phase === 'over') { put(this.hud); this.hud.hidden = true; return; }
+    this.hud.hidden = false;
+    if (pd.kind === 'simul') {
+      const waiting = awaitingIds(g);
+      put(this.hud, h('div.hud-all', h('b', pd.title), h('div.small', `모두 동시에 고르는 중 · 남은 사람 ${waiting.length}명`),
+        h('div.hud-wait', ...waiting.map(id => this.avatar(P(g, id), '.sm')))));
+      this.hud.style.borderColor = '';
+      return;
+    }
+    const p = P(g, pd.pid || g.order[g.turnIdx]);
+    const node = g.board.nodes[p.pos];
+    const job = p.job ? `${JOBS[p.job.id].name} · ${JOBS[p.job.id].ranks[p.job.rank]}` : (node.stage === 'growth' ? '학생' : '무직');
+    const payType = node.stage === 'growth' ? 'allowance' : 'payday';
+    const dist = this.board.distanceTo(p.pos, payType);
+    this.hud.style.borderColor = p.color;
+    put(this.hud,
+      h('div.hud-head', { style: { background: p.color } }, this.avatar(p, '.lg'), h('div', h('b.hud-name', p.name, p.id === this.me ? ' (나)' : ''), h('div.hud-sub', waitText(pd, p.id === this.me)))),
+      h('div.hud-body', { onclick: () => this.playerDetail(p), title: '눌러서 자세히 보기' },
+        h('div.hud-row', h('span', '💼 ', job), h('b.hud-cash', won(p.cash))),
+        p.debt ? h('div.hud-row.neg', `부채 ${p.debt} / 한도 ${debtLimit(p)}`) : null,
+        h('div.hud-stats', ...STAT_KEYS.map(k => h('span.hs', { title: STATS[k] }, STAT_SHORT[k], h('b', p.stats[k])))),
+        dist ? h('div.hud-row.small', `${payType === 'payday' ? '💰 월급날' : '🪙 용돈 칸'}까지 ${dist}칸`) : null));
+  }
+  showSteps(p, left) {
+    if (!p || !left) { this.stepBadge.classList.remove('on'); return; }
+    put(this.stepBadge, this.avatar(p, '.sm'), ` 앞으로 ${left}칸`);
+    this.stepBadge.style.borderColor = p.color;
+    this.stepBadge.classList.add('on');
+  }
+  showBanner(p) {
+    const mine = p.id === this.me;
+    const el = h('div.turn-banner' + (mine ? '.mine' : ''), { style: { '--pc': p.color } },
+      this.avatar(p, '.xl'), h('div', h('div.tb-main', mine ? '내 차례!' : `${p.name} 님의 차례`), mine ? h('div.tb-sub', '주사위를 굴리세요') : null));
+    this.bannerBox.replaceChildren(el);
+    setTimeout(() => el.classList.add('out'), BANNER_MS[this.speed]);
+    setTimeout(() => el.remove(), BANNER_MS[this.speed] + 400);
   }
   observedPerTurn() {
     const t = this.turnMarks;
@@ -133,6 +229,7 @@ export class GameScreen {
     const m = modal(h('div.menu',
       h('h3', '메뉴'),
       h('button', { onclick: () => { m.close(); this.rulesModal(); } }, '규칙 요약'),
+      h('button', { onclick: () => { m.close(); this.legendModal(); } }, '칸 종류 보기'),
       h('button', { onclick: () => modal(h('div', h('h3', '내 복구 코드'), h('p.small', '다른 컴퓨터·브라우저에서 첫 화면의 "이어하기"에 넣으면 내 자리로 돌아옵니다. 다른 사람에게 보여 주지 마세요.'), h('code.code', this.d.recoveryCode()), h('button', { onclick: () => copyText(this.d.recoveryCode()) }, '복사'))) }, '내 복구 코드'),
       h('button', { onclick: () => copyText(`${location.origin}/r/${this.room.id}`) }, '방 링크 복사'),
       h('label.inline', h('input', { type: 'checkbox', checked: a.sfx, onchange: (e) => setAudio('sfx', e.target.checked) }), '효과음'),
@@ -144,6 +241,11 @@ export class GameScreen {
   rulesModal() {
     modal(h('div.rules', { html: RULES_HTML }), { wide: true });
   }
+  legendModal() {
+    const used = new Set(Object.values(this.g.board.nodes).map(n => n.type));
+    modal(h('div', h('h3', '칸 종류'), h('div.legend', ...Object.entries(SPACE_TYPES).filter(([k]) => used.has(k)).map(([k, t]) =>
+      h('div.lg-item', h('span.lg-icon', t.icon), h('div', h('b', t.name), h('div.small', SPACE_HELP[k] || '')))))), { wide: true });
+  }
 
   // ---------- 플레이어 목록 ----------
   renderPlayers() {
@@ -154,16 +256,18 @@ export class GameScreen {
     const waiting = new Set(awaitingIds(g));
     const members = Object.fromEntries(this.room.members.map(m => [m.id, m]));
     const ordered = g.order.map(id => P(g, id));
-    put(this.playersBox, h('h3', `플레이어 ${g.players.length}명`, h('span.small', ' (눌러서 상세 보기)')),
+    const simul = g.pending?.kind === 'simul';
+    put(this.playersBox, h('h3', `플레이어 ${g.players.length}명`, h('span.small', ' · 이름에 마우스를 올리면 말이 강조됩니다')),
       h('div.plist' + (g.players.length > 6 ? '.dense' : ''), ...ordered.map(p => {
         const mem = members[p.id];
         const job = p.job ? `${JOBS[p.job.id].name} ${JOBS[p.job.id].ranks[p.job.rank]}` : (g.board.nodes[p.pos].stage === 'growth' ? '학생' : '무직');
-        return h('button.pcard' + (p.id === curId && g.phase === 'play' ? '.cur' : '') + (p.id === this.me ? '.me' : '') + (p.finished ? '.done' : ''),
-          { style: { borderColor: p.color }, onclick: () => this.playerDetail(p) },
-          h('div.prow', h('span.mk', { style: { background: p.color } }, p.mark), h('b.pname', p.name), h('span.dot' + (mem?.online ? '.on' : ''), { title: mem?.online ? '접속 중' : '연결 끊김' }),
-            p.id === curId && g.phase === 'play' ? h('span.badge', '차례') : p.id === nextId && g.phase === 'play' ? h('span.badge.next', '다음') : null,
-            waiting.has(p.id) && g.pending.kind === 'simul' ? h('span.badge.wait', '선택 중') : null,
-            g.pending.kind === 'simul' && !waiting.has(p.id) && g.phase !== 'over' ? h('span.badge.okb', '✓') : null,
+        const isCur = p.id === curId && g.phase === 'play' && !simul;
+        return h('button.pcard' + (isCur ? '.cur' : '') + (p.id === this.me ? '.me' : '') + (p.finished ? '.done' : ''),
+          { style: { borderColor: p.color, '--pc': p.color }, onclick: () => this.playerDetail(p), onmouseenter: () => this.board.spotlight(p.id), onmouseleave: () => this.board.spotlight(null) },
+          h('div.prow', this.avatar(p), h('b.pname', p.name), p.id === this.me ? h('span.badge.me', '나') : null, h('span.dot' + (mem?.online ? '.on' : ''), { title: mem?.online ? '접속 중' : '연결 끊김' }),
+            isCur ? h('span.badge', '차례') : p.id === nextId && g.phase === 'play' && !simul ? h('span.badge.next', '다음') : null,
+            simul && waiting.has(p.id) ? h('span.badge.wait', '선택 중') : null,
+            simul && !waiting.has(p.id) && g.phase !== 'over' ? h('span.badge.okb', '✓') : null,
             p.finished ? h('span.badge', `은퇴 ${p.finishOrder}위`) : null),
           h('div.prow.small', job, ' · ', REL[p.relation.state], p.children.length ? ` · 자녀 ${p.children.length}` : ''),
           h('div.prow.small', `💰 ${won(p.cash)}`, p.debt ? h('span.neg', ` 부채 ${p.debt}`) : null, ` · 순자산 ${won(netWorth(p))}`),
@@ -187,7 +291,7 @@ export class GameScreen {
       else promo = '직급 없음. 직장 칸에서 다른 직업으로 옮길 수 있음';
     }
     modal(h('div.detail',
-      h('h2', h('span.mk', { style: { background: p.color } }, p.mark), ' ', p.name, p.finished ? ` · 은퇴 ${p.finishOrder}위` : ''),
+      h('h2', this.avatar(p, '.lg'), ' ', p.name, p.finished ? ` · 은퇴 ${p.finishOrder}위` : ''),
       h('div.grid2',
         h('div',
           h('h4', '능력'), ...STAT_KEYS.map(k => h('div.stat', h('span', STATS[k]), h('span.bar', h('i', { style: { width: (p.stats[k] / STAT_MAX * 100) + '%' } })), h('b', p.stats[k]))),
@@ -213,12 +317,14 @@ export class GameScreen {
     ), { wide: true });
   }
 
-  // ---------- 행동 패널 ----------
+  // ---------- 행동 패널 + 가운데 선택 창 ----------
   renderAction() {
     const g = this.g, pd = g.pending;
+    if (!g) return;
     const box = this.actionBox;
     put(box);
-    if (!pd || g.phase === 'over') { add(box, h('h3', '게임 종료'), h('button.primary', { onclick: () => this.showResults() }, '결과 보기')); return; }
+    box.classList.remove('mine');
+    if (!pd || g.phase === 'over') { add(box, h('h3', '게임 종료'), h('button.primary', { onclick: () => this.showResults() }, '결과 보기')); put(this.dialog); return; }
     const mine = pd.kind === 'simul' ? pd.who.includes(this.me) && !(this.me in pd.responses) : pd.pid === this.me;
     const actor = pd.pid ? P(g, pd.pid) : null;
     const go = (action) => this.d.send('game', { action, pendingId: pd.id });
@@ -229,90 +335,142 @@ export class GameScreen {
     };
     const offlineWaiters = awaitingIds(g).filter(pid => { const m = this.room.members.find(x => x.id === pid); return m && !m.online && (Date.now() + this.serverOffset - m.lastSeen) > 60000; });
     const autoBtn = offlineWaiters.length ? h('button.warnbtn', { onclick: () => this.d.send('autoResolve') }, `연결 끊긴 ${offlineWaiters.map(id => P(g, id).name).join(', ')} 자동 진행`) : null;
+    const hint = h('p.hint', '👉 보드 가운데 창에서 고르세요');
+    let center = null; // { title, text, lines, body, dock }
 
     if (pd.kind === 'simul') {
       const opts = pd.perPlayer?.[this.me] || pd.options;
       const done = pd.who.filter(id => id in pd.responses).length;
-      add(box, h('h3', pd.title), h('p', pd.text), h('p.small', `응답 ${done}/${pd.who.length}명 · 결과는 모두 고른 뒤 차례 순서대로 적용됩니다.`));
-      if (mine) add(box, h('div.opts', ...opts.map((o, i) => optionButton(o, () => go({ type: 'simul', index: i })))), defaultNote(opts));
-      else if (pd.who.includes(this.me)) add(box, h('p.ok', '선택 완료! 다른 사람을 기다리는 중…'));
-      add(box, autoBtn || '');
-      return;
-    }
-    if (!mine) {
-      add(box, h('h3', `${actor.name} 님 차례`), h('p.small', waitText(pd)));
+      add(box, h('h3', pd.title), h('p.small', `응답 ${done}/${pd.who.length}명 · 결과는 모두 고른 뒤 차례 순서대로 적용됩니다.`));
+      if (mine) {
+        box.classList.add('mine');
+        add(box, hint);
+        center = { title: pd.title, text: pd.text, sub: `모두 동시에 고릅니다 · 응답 ${done}/${pd.who.length}명`, body: [h('div.opts', ...opts.map((o, i) => optionButton(o, () => go({ type: 'simul', index: i })))), defaultNote(opts)] };
+      } else if (pd.who.includes(this.me)) add(box, h('p.ok', '선택 완료! 다른 사람을 기다리는 중…'));
+      add(box, autoBtn);
+    } else if (!mine) {
+      box.style.setProperty('--pc', actor.color);
+      add(box, h('div.wait-head', this.avatar(actor, '.lg'), h('div', h('h3', `${actor.name} 님 차례`), h('div.small', waitText(pd)))));
       if (pd.kind === 'choice' || pd.kind === 'branch') add(box, h('div.preview', h('b', pd.title || '갈림길'), pd.text ? h('p.small', pd.text) : null, h('div.opts.ro', ...pd.options.map(o => optionButton(o, null)))));
-      add(box, autoBtn || '');
-      return;
-    }
-    const me = P(g, this.me);
-    if (pd.kind === 'turn') {
-      add(box, h('h3.mine', '내 차례!'), h('button.primary.big.dice', { onclick: () => { sfx('dice'); go({ type: 'roll' }); } }, '🎲 주사위 굴리기'));
-      const cards = pd.cards || [];
-      if (cards.length) {
-        add(box, h('h4', '카드 (주사위 전에 사용, 차례를 쓰지 않음)'));
-        add(box, h('div.cards', ...cards.map((c, i) => cardControl(c, i, me, g, (extra) => go({ type: 'useCard', index: i, ...extra })))));
+      add(box, autoBtn);
+    } else {
+      const me = P(g, this.me);
+      box.classList.add('mine');
+      box.style.setProperty('--pc', me.color);
+      if (pd.kind === 'turn') {
+        const roll = () => { sfx('dice'); go({ type: 'roll' }); };
+        add(box, h('h3.mine', '🎲 내 차례!'), h('button.primary.big.dice', { onclick: roll }, '🎲 주사위 굴리기'));
+        const cards = pd.cards || [];
+        if (cards.length) {
+          add(box, h('h4', '카드 (주사위 전에 사용, 차례를 쓰지 않음)'));
+          add(box, h('div.cards', ...cards.map((c, i) => cardControl(c, i, me, g, (extra) => go({ type: 'useCard', index: i, ...extra })))));
+        }
+        if (pd.canRepay) {
+          const inp = h('input', { type: 'number', min: 1, max: Math.min(me.cash, me.debt), value: Math.min(me.cash, me.debt), style: { width: '90px' } });
+          add(box, h('div.row', h('span.small', `부채 ${me.debt} 상환: `), inp, h('button.small', { onclick: () => go({ type: 'repay', amount: Number(inp.value) }) }, '갚기')));
+        }
+        add(box, defaultNote([{ label: '주사위 굴리기' }]));
+        center = { dock: true, body: [h('button.primary.big.dice.dock-dice', { onclick: roll }, '🎲 주사위 굴리기'), cards.length ? h('div.small.dock-note', `카드 ${cards.length}장 · 오른쪽 패널에서 먼저 쓸 수 있어요`) : null] };
+      } else if (pd.kind === 'branch') {
+        add(box, h('h3.mine', '갈림길!'), hint);
+        center = { title: '갈림길! 길을 고르세요', sub: `남은 이동 ${pd.steps}칸 · 보드에서 깜빡이는 칸이 각 길의 첫 칸`, body: [h('div.opts.row-opts', ...pd.options.map((o, i) => optionButton(o, () => go({ type: 'branch', index: i })))), defaultNote(pd.options)] };
+        this.board.highlight(pd.options.map(o => o.to));
+      } else if (pd.kind === 'choice') {
+        add(box, h('h3.mine', pd.title), hint);
+        center = { title: pd.title, text: pd.text, lines: pd.ctx?.lines, body: [h('div.opts', ...pd.options.map((o, i) => optionButton(o, () => go({ type: 'choose', index: i })))), defaultNote(pd.options)] };
+      } else if (pd.kind === 'reroll') {
+        add(box, h('h3.mine', '판정 실패…'), hint);
+        center = { title: '판정 실패…', text: '"다시 한 번" 카드로 다시 굴릴까요?', lines: pd.ctx?.lines,
+          body: [h('div.row', h('button.primary', { onclick: () => go({ type: 'reroll', use: true }) }, '카드 사용해서 다시 굴리기'), h('button', { onclick: () => go({ type: 'reroll', use: false }) }, '결과 받아들이기'))] };
       }
-      if (pd.canRepay) {
-        const inp = h('input', { type: 'number', min: 1, max: Math.min(me.cash, me.debt), value: Math.min(me.cash, me.debt), style: { width: '90px' } });
-        add(box, h('div.row', h('span.small', `부채 ${me.debt} 상환: `), inp, h('button.small', { onclick: () => go({ type: 'repay', amount: Number(inp.value) }) }, '갚기')));
-      }
-      add(box, defaultNote([{ label: '주사위 굴리기' }]) || '');
+    }
+    if (!(mine && pd.kind === 'branch')) this.board.highlight([]);
+    this.renderDialog(center, pd);
+  }
+  renderDialog(c, pd) {
+    if (!c || this.animating) { put(this.dialog); return; }
+    const me = P(this.g, this.me);
+    if (c.dock) { put(this.dialog, h('div.dock', { style: { '--pc': me.color } }, ...c.body)); return; }
+    if (this.dialogMin === pd.id) {
+      put(this.dialog, h('button.dlg-min', { style: { '--pc': me.color }, onclick: () => { this.dialogMin = null; this.renderAction(); } }, '▲ 선택 창 열기: ', c.title));
       return;
     }
-    if (pd.kind === 'branch') {
-      add(box, h('h3.mine', '갈림길! 길을 고르세요'), h('p.small', `남은 이동 ${pd.steps}칸`), h('div.opts', ...pd.options.map((o, i) => optionButton(o, () => go({ type: 'branch', index: i })))), defaultNote(pd.options) || '');
-      this.board.highlight(pd.options.map(o => o.to));
-      return;
-    }
-    this.board.highlight([]);
-    if (pd.kind === 'choice') {
-      add(box, h('h3.mine', pd.title), h('p', pd.text), pd.ctx?.lines?.length ? h('div.lines.small', ...pd.ctx.lines.map(l => h('div', l))) : '',
-        h('div.opts', ...pd.options.map((o, i) => optionButton(o, () => go({ type: 'choose', index: i })))), defaultNote(pd.options) || '');
-      return;
-    }
-    if (pd.kind === 'reroll') {
-      add(box, h('h3.mine', '판정 실패…'), h('div.lines.small', ...pd.ctx.lines.map(l => h('div', l))), h('p', '"다시 한 번" 카드로 다시 굴릴까요?'),
-        h('div.row', h('button.primary', { onclick: () => go({ type: 'reroll', use: true }) }, '카드 사용해서 다시 굴리기'), h('button', { onclick: () => go({ type: 'reroll', use: false }) }, '결과 받아들이기')));
-    }
+    put(this.dialog, h('div.dlg', { style: { '--pc': me.color } },
+      h('div.dlg-head', this.avatar(me), h('b', c.title), h('span.spacer'), h('button.small', { title: '창을 접고 보드 보기', onclick: () => { this.dialogMin = pd.id; this.renderAction(); } }, '보드 보기 ▼')),
+      h('div.dlg-body',
+        c.sub ? h('div.small', c.sub) : null,
+        c.text ? h('p.dlg-text', c.text) : null,
+        c.lines?.length ? h('div.lines', ...c.lines.map(l => lineChip(l))) : null,
+        ...c.body)));
   }
 
-  // ---------- 기록 ----------
+  // ---------- 기록 (왼쪽) ----------
   renderLog() {
     const g = this.g;
-    const filters = { all: '전체', me: '내 기록', money: '돈 변화', joint: '공동 사건' };
-    const list = g.log.slice().reverse().filter(e => this.logFilter === 'all' || (this.logFilter === 'me' && e.pid === this.me) || (this.logFilter === 'money' && e.changes.some(c => /현금|부채|자산/.test(c))) || (this.logFilter === 'joint' && e.kind === 'joint')).slice(0, 120);
-    put(this.logBox, 
-      h('div.log-head', h('b', '기록'), ...Object.entries(filters).map(([k, v]) => h('button.small' + (this.logFilter === k ? '.on' : ''), { onclick: () => { this.logFilter = k; this.renderLog(); } }, v))),
-      h('div.log-list', ...list.map(e => {
-        const p = e.pid ? P(g, e.pid) : null;
-        return h('div.log-item', p ? h('span.mk.sm', { style: { background: p.color } }, p.mark) : h('span.mk.sm.sys', 'ⓘ'), h('span.small.r', `R${e.round}`), ' ', h('b', e.text),
-          e.changes.length ? h('div.small.changes', e.changes.join(' · ')) : null);
-      })));
+    const filters = { all: '전체', me: '나', money: '돈', joint: '공동' };
+    const lastSeen = this.lastLogSeq ?? Infinity;
+    this.lastLogSeq = g.log.length ? g.log[g.log.length - 1].seq : 0;
+    const list = g.log.slice().reverse().filter(e => this.logFilter === 'all' || (this.logFilter === 'me' && e.pid === this.me) || (this.logFilter === 'money' && e.changes.some(c => /현금|부채|자산/.test(c))) || (this.logFilter === 'joint' && e.kind === 'joint')).slice(0, 150);
+    const keep = this.logList?.scrollTop || 0;
+    this.logList = h('div.log-list', ...list.map(e => {
+      const p = e.pid ? P(g, e.pid) : null;
+      return h('div.log-item' + (e.seq > lastSeen ? '.new' : '') + (p ? '' : '.sys'), { style: p ? { borderLeftColor: p.color } : {} },
+        h('div.log-top', p ? this.avatar(p, '.sm') : h('span.av.sm.sys', 'ⓘ'), p ? h('b.log-name', { style: { color: p.color } }, p.name) : null, h('span.small.r', `${e.round}R`)),
+        h('div.log-text', e.text),
+        e.changes.length ? h('div.changes', ...e.changes.map(c => lineChip(c, true))) : null);
+    }));
+    put(this.logBox,
+      h('div.log-head', h('button.small.log-toggle', { title: '기록 접기/펼치기', onclick: () => { const c = this.body.classList.toggle('log-closed'); save('glg.logClosed', c ? '1' : '0'); setTimeout(() => this.board.fit(), 50); } }, '◀'), h('b', '📜 기록'), h('span.spacer'), ...Object.entries(filters).map(([k, v]) => h('button.small' + (this.logFilter === k ? '.on' : ''), { onclick: () => { this.logFilter = k; this.lastLogSeq = null; this.renderLog(); } }, v))),
+      this.logList);
+    this.logList.scrollTop = keep;
   }
 
   // ---------- 연출 ----------
   showDice(roll) {
     const p = P(this.g, roll.pid);
-    const el = h('div.dice-pop', h('div.die', String(roll.v)), h('div.small', `${p?.name}: ${roll.text}`));
-    this.boardBox.parentElement.append(el);
+    const el = h('div.dice-pop', { style: { '--pc': p?.color } }, p ? h('div.dp-who', this.avatar(p, '.sm'), ` ${p.name}`) : null, h('div.die', String(roll.v)), h('div.small', roll.text));
+    this.bannerBox.append(el);
     sfx('dice');
-    setTimeout(() => el.remove(), Math.max(900, CARD_MS[this.speed] / 3));
+    setTimeout(() => el.remove(), Math.max(1000, CARD_MS[this.speed] / 3));
   }
+  // 사건 결과 카드: 보드 위 가운데에 하나씩 크게 보여 준다
   pushFeed(f) {
-    const g = this.g;
     const mineOrBig = f.pid === this.me || ['joint', 'finish', 'over', 'system'].includes(f.kind);
-    const good = f.lines.some(l => /성공|승진|결혼|탄생|\+\d/.test(l)), bad = f.lines.some(l => /실패|실직|강등|강제 매각|신용 경고|대출/.test(l));
+    const good = f.lines.some(l => /성공|승진|결혼|탄생|\+\d/.test(l)), bad = f.lines.some(l => /실패|실직|강등|강제 매각|신용 경고|대출|-\d/.test(l));
     if (f.pid === this.me) sfx(bad && !good ? 'bad' : good ? 'good' : 'coin');
+    else sfx('coin');
     if (f.kind === 'over') sfx('fanfare');
-    if (this.room.settings.skipRepeat && !mineOrBig) { toast(`${f.title}`, 'info', 2200); return; }
+    if (this.room.settings.skipRepeat && !mineOrBig) { toast(f.title, 'info', 2200); return; }
+    this.feedQueue.push({ f, mineOrBig, tone: bad && !good ? 'bad' : good && !bad ? 'good' : '' });
+    // 밀린 카드가 많으면 다른 사람의 오래된 소식부터 생략 (기록에는 남아 있음)
+    while (this.feedQueue.length > 4) {
+      const i = this.feedQueue.findIndex(x => !x.mineOrBig);
+      this.feedQueue.splice(i >= 0 ? i : 0, 1);
+    }
+    if (!this.showingFeed) this.nextFeed();
+  }
+  nextFeed() {
+    const item = this.feedQueue.shift();
+    if (!item) { this.showingFeed = null; return; }
+    const { f, mineOrBig, tone } = item;
+    const g = this.g;
     const p = f.pid ? P(g, f.pid) : null;
-    const card = h('div.feed' + (f.pid === this.me ? '.mine' : '') + `.k-${f.kind}`, { style: p ? { borderColor: p.color } : {}, onclick: () => card.remove() },
-      h('b', f.title), f.text ? h('p.small', f.text) : null, h('div.lines', ...f.lines.map(l => h('div', l))));
-    this.feedBox.prepend(card);
-    while (this.feedBox.children.length > 3) this.feedBox.lastChild.remove();
-    setTimeout(() => card.classList.add('out'), CARD_MS[this.speed] * (mineOrBig ? 1.4 : 1));
-    setTimeout(() => card.remove(), CARD_MS[this.speed] * (mineOrBig ? 1.4 : 1) + 500);
+    const node = p ? g.board.nodes[this.board.disp[p.id] ?? p.pos] : null;
+    const icon = f.kind === 'joint' ? '🤝' : f.kind === 'finish' || f.kind === 'over' ? '🏁' : node ? SPACE_TYPES[node.type]?.icon : '📣';
+    let t1 = null;
+    const close = () => { if (this.showingFeed !== card) return; clearTimeout(t1); card.classList.add('out'); setTimeout(() => { card.remove(); this.nextFeed(); }, 250); };
+    const card = h('div.evt' + (f.pid === this.me ? '.mine' : '') + (tone ? '.' + tone : '') + `.k-${f.kind}`, { style: { '--pc': p?.color || '#8a6a3a' }, onclick: () => close(), title: '눌러서 닫기' },
+      h('div.evt-head', p ? this.avatar(p) : null, h('span.evt-who', p ? (p.id === this.me ? `${p.name} (나)` : p.name) : '알림'), h('span.evt-icon', icon)),
+      h('div.evt-title', f.title.replace(p ? `${p.name} — ` : '\u0000', '')),
+      f.text ? h('p.evt-text', f.text) : null,
+      f.lines.length ? h('div.lines', ...f.lines.map(l => lineChip(l))) : null,
+      this.feedQueue.length ? h('div.evt-more', `다음 소식 ${this.feedQueue.length}개 · 눌러서 넘기기`) : null);
+    this.showingFeed = card;
+    this.feedBox.replaceChildren(card);
+    if (p) { this.board.spotlight(p.id); setTimeout(() => this.board.spotlight(null), 1200); }
+    // 대기 중인 카드가 많으면 빨리 넘긴다
+    const ms = CARD_MS[this.speed] * (mineOrBig ? 1.3 : 1) * (this.feedQueue.length >= 2 ? 0.5 : 1) + f.lines.length * 250;
+    t1 = setTimeout(close, ms);
   }
 
   showResults() {
@@ -323,7 +481,7 @@ export class GameScreen {
       h('h2', '🏁 최종 정산'),
       h('p.small', '총점 = 현금 + 자산 평가액(골동품은 감정) − 부채 + 공개 보너스(은퇴 순위·가족·추억·직급·업적). 동점이면 현금 → 먼저 은퇴한 순.'),
       ...r.map((x, i) => h('details.res' + (i === 0 ? '.win' : ''), { open: i < 3 || undefined, style: { borderColor: x.color, animationDelay: (r.length - i) * 0.25 + 's' } },
-        h('summary', h('span.rank', `${x.rank}위`), h('span.mk', { style: { background: x.color } }, x.mark), h('b', ` ${x.name}`), h('span.total', won(x.total)), h('div.small', x.summary)),
+        h('summary', h('span.rank', `${x.rank}위`), this.avatar(P(g, x.pid) || x), h('b', ` ${x.name}`), h('span.total', won(x.total)), h('div.small', x.summary)),
         h('table', ...x.rows.map(([k, v]) => h('tr', h('td', k), h('td.num' + (v < 0 ? '.neg' : ''), sign(v))))),
         h('div.small', h('b', '인생 기록: '), x.record.join(' → ')),
       )),
@@ -345,9 +503,18 @@ function awaitingIds(g) {
   if (pd.kind === 'simul') return pd.who.filter(id => !(id in pd.responses));
   return pd.pid ? [pd.pid] : [];
 }
-function waitText(pd) {
+function waitText(pd, mine) {
+  if (mine) return { turn: '주사위를 굴릴 차례예요', branch: '갈림길에서 길을 골라요', choice: '사건에서 선택해요', reroll: '다시 굴릴지 골라요' }[pd.kind] || '';
   return { turn: '주사위를 굴리거나 카드를 쓰는 중', branch: '갈림길에서 길을 고르는 중', choice: '사건에서 선택하는 중', reroll: '다시 굴릴지 고민 중' }[pd.kind] || '';
 }
+// 결과 한 줄을 좋음/나쁨 색으로 구분해 표시
+function lineChip(l, small) {
+  const bad = /실패|실직|강등|강제 매각|신용 경고|자동 대출|버림|-\d|부채 \+/.test(l);
+  const good = !bad && /성공|승진|결혼|탄생|획득|취득|해제|\+\d/.test(l);
+  return h((small ? 'span' : 'div') + '.ln' + (good ? '.good' : bad ? '.bad' : ''), l);
+}
+function load(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function save(k, v) { try { localStorage.setItem(k, v); } catch { /* 저장 불가 환경 */ } }
 function optionButton(o, onClick) {
   const b = h('button.opt' + (o.disabled ? '.dis' : '') + (o.default ? '.def' : ''), { disabled: !onClick || o.disabled ? true : undefined, onclick: onClick },
     h('div.opt-top', h('b', o.label), o.cost ? h('span.cost', `비용 ${o.cost}`) : null, o.prob !== undefined ? h('span.prob', `성공 ${o.prob}%`) : null),
