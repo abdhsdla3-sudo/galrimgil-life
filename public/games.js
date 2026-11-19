@@ -9,7 +9,7 @@ export const GAME_META = {
   },
   harbor: {
     id: 'harbor', name: '항구의 길', players: '2~4명', min: 2, max: 4, defaultCap: 4,
-    line: '섬을 돌며 항구를 사들이고 화물을 배달해 가장 부유한 선장이 되세요.',
+    line: '부산에서 출항해 세계 도시의 항구를 운영하고 화물을 배달하세요.',
     card: '/assets/cards/harbor.png', fallback: 'harbor',
   },
 };
@@ -27,7 +27,7 @@ export function artSlot(src, fallback, { cls = '', alt = '' } = {}) {
   const box = h('div.art' + (cls ? '.' + cls : ''), { 'aria-hidden': alt ? undefined : 'true' }, fallbackArt(fallback));
   loadManifest().then(set => {
     if (!set.has(src)) return;
-    const img = h('img', { src, alt, loading: 'lazy', decoding: 'async' });
+    const img = h('img', { src, alt, decoding: 'async' });
     img.addEventListener('load', () => { box.replaceChildren(img); box.classList.add('has-img'); });
   });
   return box;

@@ -44,22 +44,33 @@ for (const c of RANDOM_CARD_POOL) if (!CARDS[c]) bad(`카드 풀에 없는 카�
 
 // 「항구의 길」 데이터 무결성
 const H = await import('../game/harbor/data.js');
-if (H.TILES.length !== 24) bad(`항구의 길: 칸 수 ${H.TILES.length} (24여야 함)`);
+if (H.TILES.length !== 40) bad(`항구의 길: 칸 수 ${H.TILES.length} (40이어야 함)`);
 if (H.TILES[0].type !== 'start' || H.TILES.filter(t => t.type === 'start').length !== 1) bad('항구의 길: 출항지는 0번 칸 하나');
 const names = new Set();
 for (const t of H.TILES) {
-  if (!['start', 'port', 'market', 'event'].includes(t.type)) bad(`항구의 길: ${t.name} 알 수 없는 칸 종류`);
+  if (!['start', 'port', 'market', 'event', 'shelter', 'charter', 'tax', 'fund'].includes(t.type)) bad(`항구의 길: ${t.name} 알 수 없는 칸 종류`);
   if (names.has(t.name)) bad(`항구의 길: 칸 이름 중복 ${t.name}`);
   names.add(t.name);
   if (t.type === 'port') {
+    if (!t.country) bad(`항구의 길: ${t.name} 국가 누락`);
     if (!H.REGIONS[t.region]) bad(`항구의 길: ${t.name} 없는 지역 ${t.region}`);
-    if (!(t.price > 0 && t.upgrade > 0 && t.toll.length === 3 && t.buyback.length === 3)) bad(`항구의 길: ${t.name} 가격표 누락`);
+    if (!(t.price > 0 && t.upgrade > 0 && t.toll.length === H.ECONOMY.maxLevel + 1 && t.buyback.length === t.toll.length)) bad(`항구의 길: ${t.name} 가격표 누락`);
     if (t.buyback.some((v, i) => i && v <= t.buyback[i - 1]) || t.toll.some((v, i) => i && v <= t.toll[i - 1])) bad(`항구의 길: ${t.name} 단계별 금액이 증가하지 않음`);
   }
 }
-for (const [lo, hi] of H.CONTRACT_RANGES) if (!H.PORT_IDS.some(i => H.TILES.some(m => m.type === 'market' && ((i - m.i + 24) % 24) >= lo && ((i - m.i + 24) % 24) <= hi))) bad(`항구의 길: 계약 거리 ${lo}~${hi}에 목적지가 없음`);
+for (const size of [H.LEGACY_BOARD_SIZE, H.BOARD_SIZE]) {
+  for (const m of H.TILES.slice(0, size).filter(t => t.type === 'market')) {
+    for (const [lo, hi] of H.CONTRACT_RANGES) {
+      const valid = H.PORT_IDS.some(i => {
+        const distance = (i - m.i + size) % size;
+        return i < size && distance >= lo && distance <= hi;
+      });
+      if (!valid) bad(`항구의 길: ${m.name}의 계약 거리 ${lo}~${hi}에 목적지가 없음`);
+    }
+  }
+}
 const kinds = ['move', 'gain', 'pay', 'all', 'cargoFee', 'perPort', 'underdog', 'cargoBonus', 'none'];
 for (const e of H.EVENTS) if (!kinds.includes(e.kind) || !(e.weight > 0)) bad(`항구의 길: 이벤트 ${e.id} 설정 오류`);
-for (const k of ['roll', 'buy', 'upgrade', 'market', 'settle']) if (!H.DEFAULT_ACTION_TEXT[k]) bad(`항구의 길: 기본 행동 안내 누락 ${k}`);
+for (const k of ['roll', 'buy', 'upgrade', 'market', 'settle', 'takeover', 'charter', 'shelter']) if (!H.DEFAULT_ACTION_TEXT[k]) bad(`항구의 길: 기본 행동 안내 누락 ${k}`);
 console.log(errors ? `검사 실패 ${errors}건` : `검사 통과: 파일 ${files.length}개, 사건 ${EVENTS.length}개, 항구의 길 칸 ${H.TILES.length}개`);
 process.exit(errors ? 1 : 0);

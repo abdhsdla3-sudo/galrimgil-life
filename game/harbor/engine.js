@@ -1,6 +1,6 @@
 // 「항구의 길」 규칙 엔진. 시간·Math.random 을 쓰지 않는 결정적 상태 머신.
 // 모든 무작위는 g.rng 로만 진행하므로 같은 시드 + 같은 행동 순서 = 같은 결과. 서버와 브라우저가 함께 사용한다.
-import { ECONOMY, TILES, BOARD_SIZE, PORT_IDS, CARGO, CONTRACT_RANGES, contractReward, EVENTS, SHIPS, normalizeHarborSettings } from './data.js';
+import { ECONOMY, TILES, BOARD_SIZE, PORT_IDS, REGION_PORTS, CARGO, CONTRACT_RANGES, contractReward, EVENTS, SHIPS, normalizeHarborSettings, boardSizeOf, levelLimit, tilesOf } from './data.js';
 import { randInt, pick, weightedPick, shuffle } from '../rng.js';
 
 export const SCHEMA_VERSION = 1;
@@ -23,7 +23,8 @@ export function createGame(members, settingsIn, seed) {
     stats: { delivered: 0, deliveryIncome: 0, tollPaid: 0, tollEarned: 0, supply: 0 },
   }));
   const g = {
-    schema: SCHEMA_VERSION, game: 'harbor', seed: seed >>> 0, rng, settings, players,
+    schema: SCHEMA_VERSION, game: 'harbor', boardSize: BOARD_SIZE, seed: seed >>> 0, rng, settings, players,
+    doubles: 0, fund: 0,
     owners: {}, order: shuffle(rng, players.map(p => p.id)), turnIdx: 0, round: 1, phase: 'play',
     pending: null, pendingSeq: 0, log: [], logSeq: 0, lastRoll: null, results: null,
   };
@@ -37,7 +38,15 @@ export const P = (g, id) => g.players.find(p => p.id === id);
 export const alive = (g) => g.players.filter(p => !p.bankrupt);
 export const portsOf = (g, pid) => PORT_IDS.filter(i => g.owners[i]?.pid === pid);
 export const buybackOf = (g, i) => { const o = g.owners[i]; return o ? TILES[i].buyback[o.level] : 0; };
-export const tollOf = (g, i) => { const o = g.owners[i]; return o ? TILES[i].toll[o.level] : 0; };
+export const ownedRegions = (g, pid) => g.boardSize ? Object.keys(REGION_PORTS).filter(r => REGION_PORTS[r].every(i => g.owners[i]?.pid === pid)) : [];
+export const tollOf = (g, i) => {
+  const o = g.owners[i];
+  return o ? TILES[i].toll[o.level] * (ownedRegions(g, o.pid).includes(TILES[i].region) ? ECONOMY.regionMultiplier : 1) : 0;
+};
+export const takeoverCost = (g, i) => {
+  const o = g.owners[i], t = TILES[i];
+  return Math.ceil((t.price + t.upgrade * o.level) * ECONOMY.takeoverRate / 5) * 5;
+};
 export const liquidValue = (g, pid) => portsOf(g, pid).reduce((a, i) => a + buybackOf(g, i), 0);
 export const worthOf = (g, p) => p.cash + liquidValue(g, p.id);
 export const currentPid = (g) => g.order[g.turnIdx];
@@ -51,6 +60,7 @@ export function defaultActionFor(g, pid) {
   const pd = g.pending;
   if (!pd || pd.pid !== pid || g.phase === 'over') return null;
   if (pd.kind === 'roll') return { type: 'roll' };
+  if (pd.kind === 'shelter') return { type: 'roll' };
   if (pd.kind === 'settle') {
     const cheapest = portsOf(g, pid).sort((a, b) => buybackOf(g, a) - buybackOf(g, b))[0];
     return { type: 'sell', tile: cheapest };
@@ -64,21 +74,61 @@ export function act(g, pid, a) {
   const pd = g.pending;
   if (!pd || pd.pid !== pid) fail(`지금은 ${P(g, pd?.pid)?.name ?? '다른 사람'}의 차례입니다.`);
   const p = P(g, pid);
+  const tiles = tilesOf(g);
   const type = a?.type;
   switch (pd.kind) {
     case 'roll': {
       if (type !== 'roll') fail('주사위를 굴려 주세요.');
-      const value = randInt(g.rng, 1, 6);
-      g.lastRoll = { seq: (g.lastRoll?.seq || 0) + 1, pid, value };
-      p.turns++;
-      log(g, pid, `${p.name}: 주사위 ${value}`, 'roll');
+      const { value, double } = rollDice(g, p);
+      g.doubles = double ? (g.doubles || 0) + 1 : 0;
+      if (g.doubles === 3) {
+        p.pos = TILES.find(t => t.type === 'shelter').i;
+        return shelter(g, p);
+      }
       move(g, p, value);
       return land(g, p);
     }
+    case 'shelter': {
+      if (type === 'release') {
+        if (p.cash < ECONOMY.shelterFee) fail('출항 비용이 부족합니다.');
+        transfer(g, p, ECONOMY.shelterFee, null, '피난소 출항비');
+        p.sheltered = 0;
+        return setPending(g, { kind: 'roll', pid });
+      }
+      if (type !== 'roll') fail('더블을 시도하거나 비용을 내고 출항하세요.');
+      const { value, double } = rollDice(g, p);
+      p.sheltered = double ? 0 : p.sheltered - 1;
+      if (p.sheltered) {
+        log(g, pid, `${p.name}: 폭풍이 계속됩니다 · 남은 대기 ${p.sheltered}차례`, 'event');
+        return endTurn(g);
+      }
+      log(g, pid, `${p.name}: 피난소에서 출항합니다.`, 'event');
+      move(g, p, value);
+      return land(g, p);
+    }
+    case 'charter': {
+      if (type === 'pass') return endTurn(g);
+      if (type !== 'sail' || !Number.isInteger(a.tile) || TILES[a.tile]?.type !== 'port' || p.cash < ECONOMY.charterFee) fail('이동할 항구와 승선 비용을 확인하세요.');
+      transfer(g, p, ECONOMY.charterFee, null, '쾌속선 승선료');
+      const distance = (a.tile - p.pos + boardSizeOf(g)) % boardSizeOf(g);
+      move(g, p, distance, true);
+      return land(g, p);
+    }
+    case 'takeover': {
+      if (type === 'pass') return endTurn(g);
+      const o = g.owners[pd.tile];
+      if (type !== 'takeover' || !o || o.pid === pid || o.level >= ECONOMY.maxLevel || p.cash < pd.cost) fail('이 항구를 인수할 수 없습니다.');
+      const seller = P(g, o.pid);
+      p.cash -= pd.cost;
+      seller.cash += pd.cost;
+      o.pid = pid;
+      log(g, pid, `${p.name}: ${TILES[pd.tile].name} 인수 (${pd.cost} → ${seller.name})`, 'buy', [[pid, -pd.cost], [seller.id, pd.cost]]);
+      return endTurn(g);
+    }
     case 'buy': {
-      if (type === 'pass') { log(g, pid, `${p.name}: ${TILES[pd.tile].name} 매입을 지나침`, 'pass'); return endTurn(g); }
+      if (type === 'pass') { log(g, pid, `${p.name}: ${tiles[pd.tile].name} 매입을 지나침`, 'pass'); return endTurn(g); }
       if (type !== 'buy') fail('매입 또는 지나가기를 고르세요.');
-      const t = TILES[pd.tile];
+      const t = tiles[pd.tile];
       if (g.owners[pd.tile]) fail('이미 주인이 있는 항구입니다.');
       if (p.cash < t.price) fail('자금이 부족합니다.');
       p.cash -= t.price;
@@ -87,14 +137,14 @@ export function act(g, pid, a) {
       return endTurn(g);
     }
     case 'upgrade': {
-      if (type === 'pass') { log(g, pid, `${p.name}: ${TILES[pd.tile].name} 확장을 미룸`, 'pass'); return endTurn(g); }
+      if (type === 'pass') { log(g, pid, `${p.name}: ${tiles[pd.tile].name} 확장을 미룸`, 'pass'); return endTurn(g); }
       if (type !== 'upgrade') fail('확장 또는 지나가기를 고르세요.');
-      const t = TILES[pd.tile], o = g.owners[pd.tile];
-      if (o?.pid !== pid || o.level >= ECONOMY.maxLevel) fail('확장할 수 없는 항구입니다.');
+      const t = tiles[pd.tile], o = g.owners[pd.tile];
+      if (o?.pid !== pid || o.level >= levelLimit(g)) fail('확장할 수 없는 항구입니다.');
       if (p.cash < t.upgrade) fail('자금이 부족합니다.');
       p.cash -= t.upgrade;
       o.level++;
-      log(g, pid, `${p.name}: ${t.name} ${o.level}단계 확장 (−${t.upgrade}) · 이용료 ${t.toll[o.level]}`, 'upgrade', [[pid, -t.upgrade]]);
+      log(g, pid, `${p.name}: ${t.name} ${o.level}단계 확장 (−${t.upgrade}) · 이용료 ${tollOf(g, t.i)}`, 'upgrade', [[pid, -t.upgrade]]);
       return endTurn(g);
     }
     case 'market': {
@@ -114,11 +164,11 @@ export function act(g, pid, a) {
       const v = buybackOf(g, i);
       delete g.owners[i];
       p.cash += v;
-      log(g, pid, `${p.name}: ${TILES[i].name} 환매 (+${v})`, 'sell', [[pid, v]]);
+      log(g, pid, `${p.name}: ${tiles[i].name} 환매 (+${v})`, 'sell', [[pid, v]]);
       if (p.cash >= pd.owed) {
         transfer(g, p, pd.owed, pd.to, pd.reason, pd.logged);
         if (pd.logged) log(g, pid, `${p.name}: ${pd.reason} ${pd.owed} 정산 완료`, 'pay');
-        return endTurn(g);
+        return afterPayment(g, p, pd.tile);
       }
       setPending(g, { ...pd, kind: 'settle' });
       return;
@@ -128,17 +178,35 @@ export function act(g, pid, a) {
 }
 
 // ---------- 이동과 도착 ----------
-function move(g, p, steps) {
+function rollDice(g, p) {
+  const dice = [randInt(g.rng, 1, 6)];
+  if (g.boardSize) dice.push(randInt(g.rng, 1, 6));
+  const value = dice.reduce((sum, face) => sum + face, 0);
+  const double = dice[0] === dice[1];
+  g.lastRoll = { seq: (g.lastRoll?.seq || 0) + 1, pid: p.id, value, dice };
+  p.turns++;
+  log(g, p.id, `${p.name}: 주사위 ${dice.join(' + ')}${double ? ' · 더블' : ''}`, 'roll');
+  return { value, double };
+}
+
+function shelter(g, p) {
+  p.sheltered = 2;
+  g.doubles = 0;
+  log(g, p.id, `${p.name}: 폭풍 피난소로 들어갑니다 · 최대 2차례 대기`, 'event');
+  return endTurn(g);
+}
+
+function move(g, p, steps, express = false) {
   let passedStart = false;
   for (let s = 0; s < steps; s++) {
-    p.pos = (p.pos + 1) % BOARD_SIZE;
+    p.pos = (p.pos + 1) % boardSizeOf(g);
     if (p.pos === 0 && !passedStart) {
       passedStart = true;
       p.cash += ECONOMY.supply;
       p.stats.supply += ECONOMY.supply;
       log(g, p.id, `${p.name}: 출항지 보급금 +${ECONOMY.supply}`, 'supply', [[p.id, ECONOMY.supply]]);
     }
-    if (p.cargo && p.cargo.dest === p.pos) deliver(g, p);
+    if (p.cargo && p.cargo.dest === p.pos && (!express || s === steps - 1)) deliver(g, p);
   }
 }
 
@@ -152,8 +220,23 @@ function deliver(g, p) {
 }
 
 function land(g, p, fromEvent = false) {
-  const t = TILES[p.pos];
+  const t = tilesOf(g)[p.pos];
   if (t.type === 'start') { log(g, p.id, `${p.name}: 출항지에 정박`, 'info'); return endTurn(g); }
+  if (t.type === 'shelter') return shelter(g, p);
+  if (t.type === 'charter') {
+    if (p.cash >= ECONOMY.charterFee) return setPending(g, { kind: 'charter', pid: p.id, tile: t.i });
+    return endTurn(g);
+  }
+  if (t.type === 'tax') {
+    if (charge(g, p, ECONOMY.harborTax, null, '항로 관리비', false, t.i)) return afterPayment(g, p, t.i);
+    return;
+  }
+  if (t.type === 'fund') {
+    p.cash += g.fund;
+    log(g, p.id, `${p.name}: 선원 조합 기금 +${g.fund}`, 'event', [[p.id, g.fund]]);
+    g.fund = 0;
+    return endTurn(g);
+  }
   if (t.type === 'port') {
     const o = g.owners[t.i];
     if (!o) {
@@ -162,13 +245,13 @@ function land(g, p, fromEvent = false) {
       return endTurn(g);
     }
     if (o.pid === p.id) {
-      if (o.level >= ECONOMY.maxLevel) { log(g, p.id, `${p.name}: 최대로 확장된 ${t.name}에 정박`, 'info'); return endTurn(g); }
+      if (o.level >= levelLimit(g)) { log(g, p.id, `${p.name}: 최대로 확장된 ${t.name}에 정박`, 'info'); return endTurn(g); }
       if (p.cash >= t.upgrade) return setPending(g, { kind: 'upgrade', pid: p.id, tile: t.i, cost: t.upgrade, level: o.level });
       log(g, p.id, `${p.name}: ${t.name} 확장 자금 부족 (필요 ${t.upgrade})`, 'info');
       return endTurn(g);
     }
-    const fee = t.toll[o.level];
-    if (charge(g, p, fee, o.pid, `${t.name} 이용료`)) endTurn(g);
+    const fee = tollOf(g, t.i);
+    if (charge(g, p, fee, o.pid, `${t.name} 이용료`, false, t.i)) afterPayment(g, p, t.i);
     return;
   }
   if (t.type === 'market') {
@@ -182,13 +265,14 @@ function land(g, p, fromEvent = false) {
 }
 
 function makeContracts(g, from) {
+  const size = boardSizeOf(g);
   const used = new Set();
   return CONTRACT_RANGES.map(([lo, hi]) => {
-    const choices = PORT_IDS.map(i => [i, (i - from + BOARD_SIZE) % BOARD_SIZE]).filter(([i, d]) => d >= lo && d <= hi && !used.has(i));
+    const choices = PORT_IDS.filter(i => i < size).map(i => [i, (i - from + size) % size]).filter(([i, d]) => d >= lo && d <= hi && !used.has(i));
     const [dest, dist] = pick(g.rng, choices);
     used.add(dest);
     const cargo = pick(g.rng, CARGO);
-    return { cargo: cargo.id, cargoName: cargo.name, dest, destName: TILES[dest].name, dist, reward: contractReward(dist, cargo) };
+    return { cargo: cargo.id, cargoName: cargo.name, dest, destName: tilesOf(g)[dest].name, dist, reward: contractReward(dist, cargo) };
   });
 }
 
@@ -250,12 +334,23 @@ function applyEvent(g, p, e) {
 
 // ---------- 돈 지불 ----------
 // 지불 가능하면 즉시 처리하고 true. 항구를 팔아야 하면 정산 대기(false). 모두 팔아도 부족하면 파산(true).
-function charge(g, p, amount, toPid, reason, logged = false) {
+function charge(g, p, amount, toPid, reason, logged = false, tile) {
   if (p.cash >= amount) { transfer(g, p, amount, toPid, reason, logged); return true; }
   if (p.cash + liquidValue(g, p.id) < amount) { bankrupt(g, p, amount, toPid, reason); return true; }
   log(g, p.id, `${p.name}: ${reason} ${amount} 지불에 현금 ${amount - p.cash} 부족 — 항구를 매각해 정산해야 합니다`, 'warn');
-  setPending(g, { kind: 'settle', pid: p.id, owed: amount, to: toPid, reason, logged });
+  setPending(g, { kind: 'settle', pid: p.id, owed: amount, to: toPid, reason, logged, ...(tile === undefined ? {} : { tile }) });
   return false;
+}
+function afterPayment(g, p, tile) {
+  if (g.boardSize && !p.bankrupt) {
+    if (TILES[tile]?.type === 'tax') g.fund += ECONOMY.harborTax;
+    const o = g.owners[tile];
+    if (o && o.pid !== p.id && o.level < ECONOMY.maxLevel) {
+      const cost = takeoverCost(g, tile);
+      if (p.cash >= cost) return setPending(g, { kind: 'takeover', pid: p.id, tile, cost });
+    }
+  }
+  return endTurn(g);
 }
 function transfer(g, p, amount, toPid, reason, logged = false) {
   p.cash -= amount;
@@ -283,6 +378,10 @@ function bankrupt(g, p, amount, toPid, reason) {
 // ---------- 차례·라운드 ----------
 function endTurn(g) {
   if (alive(g).length <= 1) return finish(g, '생존 선장이 한 명만 남았습니다.');
+  const player = P(g, currentPid(g));
+  if (ownedRegions(g, player.id).length >= 3) return finish(g, '세 권역의 항구를 모두 확보했습니다.', player.id);
+  if (g.doubles && !player.bankrupt && !player.sheltered) return setPending(g, { kind: 'roll', pid: player.id });
+  g.doubles = 0;
   const n = g.order.length;
   let idx = g.turnIdx;
   for (let k = 0; k < n; k++) {
@@ -296,18 +395,18 @@ function endTurn(g) {
     if (!P(g, g.order[idx]).bankrupt) break;
   }
   g.turnIdx = idx;
-  setPending(g, { kind: 'roll', pid: g.order[idx] });
+  setPending(g, { kind: P(g, g.order[idx]).sheltered ? 'shelter' : 'roll', pid: g.order[idx] });
 }
 
-function finish(g, why) {
+function finish(g, why, winner) {
   g.phase = 'over';
   g.pending = null;
   const rows = g.players.map(p => ({
     pid: p.id, name: p.name, ship: p.ship, color: p.color, bankrupt: p.bankrupt, bankruptRound: p.bankruptRound,
-    cash: p.cash, ports: portsOf(g, p.id).map(i => ({ tile: i, name: TILES[i].name, level: g.owners[i].level, buyback: buybackOf(g, i) })),
+    cash: p.cash, ports: portsOf(g, p.id).map(i => ({ tile: i, name: tilesOf(g)[i].name, level: g.owners[i].level, buyback: buybackOf(g, i) })),
     portValue: liquidValue(g, p.id), total: worthOf(g, p), stats: p.stats,
   }));
-  const score = (r) => r.bankrupt ? -1e9 + r.bankruptRound : r.total;
+  const score = (r) => r.pid === winner ? Infinity : r.bankrupt ? -1e9 + r.bankruptRound : r.total;
   rows.sort((a, b) => score(b) - score(a));
   rows.forEach((r, i) => { r.rank = i > 0 && score(rows[i - 1]) === score(r) ? rows[i - 1].rank : i + 1; });
   g.results = rows;

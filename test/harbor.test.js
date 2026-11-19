@@ -1,15 +1,99 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, act, awaiting, defaultActionFor, GameError, P, portsOf, worthOf, _internal } from '../game/harbor/engine.js';
-import { TILES, ECONOMY, BOARD_SIZE, PORT_IDS, CONTRACT_RANGES, normalizeHarborSettings } from '../game/harbor/data.js';
+import { createGame, act, awaiting, defaultActionFor, GameError, P, portsOf, worthOf, tollOf, _internal } from '../game/harbor/engine.js';
+import { TILES, ECONOMY, BOARD_SIZE, PORT_IDS, REGION_PORTS, CONTRACT_RANGES, normalizeHarborSettings } from '../game/harbor/data.js';
+import { randInt } from '../game/rng.js';
 import { playHarbor } from './harbor-bot.js';
 
 const members = (n) => Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: '선장' + (i + 1) }));
 const fresh = (n = 2, settings = {}) => createGame(members(n), settings, 42);
 const cur = (g) => P(g, g.pending.pid);
 
-test('보드 데이터: 24칸, 출항지 1·항구·시장·이벤트 배치, 가격표가 단계별로 증가', () => {
-  assert.equal(BOARD_SIZE, 24);
+test('더블은 같은 선장의 추가 굴림, 세 번째 더블은 피난소, 유료 출항으로 복귀', () => {
+  const g = fresh();
+  const p = cur(g), seed = Array.from({ length: 100 }, (_, i) => i + 1).find(s => {
+    const rng = { s, n: 0 };
+    return randInt(rng, 1, 6) === randInt(rng, 1, 6);
+  });
+  for (let i = 0; i < 3; i++) {
+    p.pos = 0;
+    g.rng = { s: seed, n: 0 };
+    act(g, p.id, { type: 'roll' });
+    assert.equal(g.lastRoll.dice[0], g.lastRoll.dice[1]);
+    if (i < 2) {
+      if (g.pending.kind !== 'roll') act(g, p.id, defaultActionFor(g, p.id));
+      assert.equal(g.pending.pid, p.id);
+    }
+  }
+  assert.equal(TILES[p.pos].type, 'shelter');
+  assert.equal(p.sheltered, 2);
+  _internal.endTurn(g);
+  assert.equal(g.pending.kind, 'shelter');
+  const cash = p.cash;
+  act(g, p.id, { type: 'release' });
+  assert.equal(p.cash, cash - ECONOMY.shelterFee);
+  assert.equal(p.sheltered, 0);
+  assert.equal(g.pending.kind, 'roll');
+});
+
+test('인수 대금은 소유자에게 지급, 해상 기지는 인수 금지, 세 권역 완성은 즉시 승리', () => {
+  const g = fresh(), p = cur(g), other = g.players.find(x => x !== p);
+  for (const i of REGION_PORTS.west) g.owners[i] = { pid: other.id, level: 0 };
+  const i = REGION_PORTS.west[0];
+  const fee = TILES[i].toll[0] * ECONOMY.regionMultiplier;
+  assert.equal(tollOf(g, i), fee);
+  p.pos = i;
+  const cash = other.cash;
+  _internal.land(g, p);
+  assert.equal(g.pending.kind, 'takeover');
+  const cost = g.pending.cost;
+  act(g, p.id, { type: 'takeover' });
+  assert.equal(other.cash, cash + fee + cost);
+  assert.equal(g.owners[i].pid, p.id);
+  assert.equal(tollOf(g, REGION_PORTS.west[1]), TILES[REGION_PORTS.west[1]].toll[0]);
+  g.owners[i].level = ECONOMY.maxLevel;
+  other.pos = i;
+  _internal.land(g, other);
+  assert.notEqual(g.pending.kind, 'takeover');
+  for (const region of ['west', 'north', 'east']) {
+    for (const i of REGION_PORTS[region]) g.owners[i] = { pid: p.id, level: 0 };
+  }
+  _internal.endTurn(g);
+  assert.equal(g.results[0].pid, p.id);
+});
+
+test('관리비가 기금에 쌓이고 선원 조합에서 지급된다. 쾌속선은 유효한 항구로 이동', () => {
+  const g = fresh(), p = cur(g), other = g.players.find(x => x !== p);
+  p.pos = TILES.find(t => t.type === 'tax').i;
+  _internal.land(g, p);
+  assert.equal(g.fund, ECONOMY.harborTax);
+  other.pos = TILES.find(t => t.type === 'fund').i;
+  _internal.land(g, other);
+  assert.equal(other.cash, ECONOMY.startCash + ECONOMY.harborTax);
+  assert.equal(g.fund, 0);
+  p.pos = TILES.find(t => t.type === 'charter').i;
+  _internal.land(g, p);
+  assert.throws(() => act(g, p.id, { type: 'sail', tile: 0 }), GameError);
+  const dest = PORT_IDS.find(i => i > p.pos);
+  act(g, p.id, { type: 'sail', tile: dest });
+  assert.equal(p.pos, dest);
+  assert.equal(g.pending.kind, 'buy');
+  assert.equal(p.cash, ECONOMY.startCash - ECONOMY.harborTax - ECONOMY.charterFee);
+});
+
+test('기존 24칸 저장 방은 주사위 한 개와 기존 순환 경계를 사용', () => {
+  const g = fresh();
+  delete g.boardSize;
+  const p = cur(g);
+  p.pos = 23;
+  act(g, p.id, { type: 'roll' });
+  assert.equal(g.lastRoll.dice.length, 1);
+  assert.ok(p.pos < 6);
+  assert.equal(p.stats.supply, ECONOMY.supply);
+});
+
+test('보드 데이터: 40칸, 출항지 1·항구·시장·이벤트 배치, 가격표가 단계별로 증가', () => {
+  assert.equal(BOARD_SIZE, 40);
   assert.equal(TILES[0].type, 'start');
   assert.ok(PORT_IDS.length >= 12);
   for (const type of ['market', 'event']) assert.ok(TILES.some(t => t.type === type));
@@ -54,23 +138,23 @@ test('라운드: 생존자가 한 번씩 차례를 마치면 다음 라운드, �
   assert.equal(g.round, 1);
   let turns = 0;
   while (g.round === 1) { const pid = awaiting(g)[0]; act(g, pid, defaultActionFor(g, pid)); if (g.pending?.kind === 'roll') turns++; }
-  assert.equal(turns, 3);
+  assert.ok(turns >= 3, '더블 추가 굴림을 포함해 모두가 차례를 진행');
   assert.equal(normalizeHarborSettings({ rounds: 99 }).rounds, 10);
 });
 
 test('출항지를 지나가거나 도착하면 그 이동에서 보급금을 한 번만 받는다', () => {
   const g = fresh();
   const p = cur(g);
-  p.pos = 21; const c0 = p.cash;
-  _internal.move(g, p, 5); // 22,23,0,1,2
+  p.pos = BOARD_SIZE - 3; const c0 = p.cash;
+  _internal.move(g, p, 5);
   assert.equal(p.cash, c0 + ECONOMY.supply);
-  p.pos = 20; const c1 = p.cash;
+  p.pos = BOARD_SIZE - 4; const c1 = p.cash;
   _internal.move(g, p, 4); // 0 에 도착
   assert.equal(p.pos, 0);
   assert.equal(p.cash, c1 + ECONOMY.supply);
 });
 
-test('매입·지나가기, 내 항구 재도착 시 최대 2단계 확장, 다른 사람 항구 이용료', () => {
+test('매입·지나가기, 내 항구 재도착 시 해상 기지까지 확장, 다른 사람 항구 이용료', () => {
   const g = fresh();
   const a = cur(g), b = g.players.find(p => p !== a);
   a.pos = 0;
@@ -86,8 +170,8 @@ test('매입·지나가기, 내 항구 재도착 시 최대 2단계 확장, 다�
   _internal.move(g, b, 1); _internal.land(g, b);
   assert.equal(b.cash, bc - TILES[1].toll[0]);
   assert.equal(a.cash, ac + TILES[1].toll[0]);
-  // a 차례: 내 항구 재도착 → 확장 두 번까지
-  for (let lv = 1; lv <= 2; lv++) {
+  if (g.pending.kind === 'takeover') act(g, b.id, { type: 'pass' });
+  for (let lv = 1; lv <= ECONOMY.maxLevel; lv++) {
     assert.equal(g.pending.pid, a.id);
     a.pos = 0; _internal.move(g, a, 1); _internal.land(g, a);
     assert.equal(g.pending.kind, 'upgrade');

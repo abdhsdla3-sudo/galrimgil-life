@@ -184,3 +184,49 @@
 @media (prefers-reduced-motion: reduce) {
   .hc-dice.rolling .die, .delta { animation: none; }
 }
+.hboard {
+  grid-template-columns: repeat(var(--side, 7), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--side, 7), minmax(0, 1fr));
+  width: 100%;
+  max-width: min(100%, max(560px, calc(100vh - 90px)));
+  max-height: none;
+}
+.hcenter { grid-area: 2 / 2 / var(--side, 7) / var(--side, 7); }
+.htile { min-height: 0; padding: 12% 2px 2px; }
+.ht-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ht-icon { display: inline; }
+.ht-pawns {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 40px);
+  margin-top: auto;
+}
+.ht-pawns:empty { display: none; }
+.ht-pawns .ship { width: 100% !important; height: auto !important; aspect-ratio: 1.4; }
+.ht-pawns .ship img { object-fit: contain; }
+.htile.occupied .ht-own, .htile.occupied .ht-price { display: none; }
+.t-shelter { background: #ffdaca; }
+.t-charter { background: #c5efe8; }
+.t-tax, .t-fund { background: #fff0ba; }
+.hasset-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 6px; }
+.hasset-head button, .hp-cash { min-height: 44px; }
+.harbor .hp-cash { padding: 3px 5px; background: transparent; border: 1px solid #51709c; color: #fff; box-shadow: none; }
+.cash-label { display: block; font: .72rem system-ui, sans-serif; color: var(--hmuted); }
+.asset-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.asset-totals div { background: #edf6f5; border-radius: 8px; padding: 8px; }
+.asset-totals dt { font-size: .8rem; }
+.asset-totals dd { margin: 4px 0 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.asset-ports { list-style: none; padding: 0; margin: 0; }
+.asset-ports li { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 7px 0; border-bottom: 1px solid #d8e4ea; }
+.route-list { padding-left: 1.6rem; }
+.route-list li { margin: 5px 0; }
+.route-list button { min-height: 44px; width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 6px; text-align: left; }
+.hact-row select { min-height: 44px; width: 100%; }
+@media (max-width: 520px) {
+  .htile { padding: 10% 1px 1px; }
+  .ht-pawns .ship { aspect-ratio: 1.75; }
+  .hp-name b { overflow-wrap: anywhere; }
+  .hasset-head h2 { font-size: 1rem; }
+  .hc-dice { gap: 4px; font-size: .9rem; }
+}

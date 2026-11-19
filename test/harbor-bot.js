@@ -10,6 +10,9 @@ export function harborBotAction(g, pid, r, style = 'random') {
   if (style === 'default') return defaultActionFor(g, pid);
   switch (pd.kind) {
     case 'roll': return { type: 'roll' };
+    case 'shelter': return p.cash >= 250 && r() < 0.4 ? { type: 'release' } : { type: 'roll' };
+    case 'takeover': return { type: p.cash - pd.cost >= 150 && r() < 0.6 ? 'takeover' : 'pass' };
+    case 'charter': return style === 'trader' && p.cargo ? { type: 'sail', tile: p.cargo.dest } : { type: 'pass' };
     case 'buy': {
       const keep = p.cash - pd.price;
       const want = style === 'buyer' ? keep >= 40 : style === 'trader' ? keep >= 250 : r() < 0.75;

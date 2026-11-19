@@ -4,10 +4,15 @@
 export const ECONOMY = {
   startCash: 600,      // 시작 자금
   supply: 120,         // 출항지 보급금 (지나가거나 도착할 때, 이동 1회당 1번)
-  tollRate: [0.55, 1.25, 2.0], // 시설 단계(0~2)별 이용료 = 매입가 × 비율
+  tollRate: [0.55, 1.25, 2.0, 2.75], // 시설 단계별 이용료 = 매입가 × 비율
   upgradeRate: 0.5,    // 단계당 확장비 = 매입가 × 비율
   buybackRate: 0.8,  // 환매가 = (매입가 + 지불한 확장비) × 비율
-  maxLevel: 2,
+  maxLevel: 3,
+  regionMultiplier: 2,
+  takeoverRate: 1.6,
+  charterFee: 80,
+  shelterFee: 100,
+  harborTax: 90,
   contract: { base: 50, perStep: 14 }, // 배송 보상 = (기본 + 거리 × 칸당) × 화물 배율
 };
 
@@ -15,8 +20,7 @@ export const ROUND_OPTIONS = [6, 8, 10, 12];
 export const TIME_OPTIONS = [30, 60, 90];
 export const PLAYER_LIMITS = { min: 2, max: 4, default: 4 };
 
-// 24칸 순환 항로. 0번이 출항지, 시계 방향으로 진행한다.
-// type: start | port | market | event
+// 기존 저장 방의 칸 번호를 유지하기 위해 신규 칸은 뒤에 추가한다.
 const LAYOUT = [
   ['start', '물빛 출항지'],
   ['port', '솔바람항', 100, 'west'],
@@ -42,15 +46,54 @@ const LAYOUT = [
   ['port', '푸른돛항', 300, 'cape'],
   ['event', '등불 해역'],
   ['port', '달무리항', 330, 'cape'],
+  ['shelter', '폭풍 피난소'],
+  ['port', '유리등대', 190, 'isles'],
+  ['port', '흰돌항', 210, 'isles'],
+  ['market', '여울 화물시장'],
+  ['port', '해무부두', 230, 'isles'],
+  ['tax', '항로 관리소'],
+  ['event', '까치섬 소식'],
+  ['port', '은빛수로', 250, 'strait'],
+  ['charter', '쾌속선 선착장'],
+  ['port', '흑진주항', 270, 'strait'],
+  ['port', '바다숲항', 290, 'strait'],
+  ['fund', '선원 조합'],
+  ['port', '청람포구', 280, 'ocean'],
+  ['event', '돌고래 항로'],
+  ['port', '구름곶', 300, 'ocean'],
+  ['port', '금빛등대', 320, 'ocean'],
 ];
 
 export const REGIONS = {
-  west: { name: '서쪽 어촌', color: '#3fb6a8' },
-  north: { name: '북쪽 산호섬', color: '#f2a65a' },
-  east: { name: '동쪽 무역로', color: '#e96f5c' },
-  south: { name: '남쪽 진주만', color: '#b48cd9' },
-  cape: { name: '끝섬 곶', color: '#f4d35e' },
+  west: { name: '대한민국', color: '#3fb6a8' },
+  north: { name: '동아시아', color: '#f2a65a' },
+  east: { name: '동남아시아', color: '#e96f5c' },
+  south: { name: '인도양·중동', color: '#b48cd9' },
+  cape: { name: '지중해', color: '#f4d35e' },
+  isles: { name: '북유럽', color: '#6fa8e8' },
+  strait: { name: '북아메리카', color: '#79bc57' },
+  ocean: { name: '태평양·오세아니아', color: '#e879ab' },
 };
+
+const WORLD_NAMES = [
+  '부산 출항지', '인천', '여수', '대한해협 화물시장', '제주', '동중국해',
+  '상하이', '도쿄', '태평양 해상 소식', '홍콩', '남중국해 화물시장',
+  '마닐라', '남중국해 소식', '싱가포르', '방콕', '말라카 해협 화물시장',
+  '콜롬보', '인도양', '뭄바이', '두바이', '수에즈 화물시장',
+  '아테네', '지중해 소식', '바르셀로나', '폭풍 피난소', '런던', '암스테르담',
+  '북해 화물시장', '코펜하겐', '항로 관리소', '대서양 해상 소식', '뉴욕', '쾌속선 선착장',
+  '밴쿠버', '샌프란시스코', '선원 조합', '호놀룰루', '남태평양',
+  '시드니', '오클랜드',
+];
+const PORT_COUNTRIES = {
+  인천: '대한민국', 여수: '대한민국', 제주: '대한민국', 상하이: '중국',
+  도쿄: '일본', 홍콩: '중국 특별행정구', 마닐라: '필리핀', 싱가포르: '싱가포르',
+  방콕: '태국', 콜롬보: '스리랑카', 뭄바이: '인도', 두바이: '아랍에미리트',
+  아테네: '그리스', 바르셀로나: '스페인', 런던: '영국', 암스테르담: '네덜란드',
+  코펜하겐: '덴마크', 뉴욕: '미국', 밴쿠버: '캐나다', 샌프란시스코: '미국',
+  호놀룰루: '미국', 시드니: '호주', 오클랜드: '뉴질랜드',
+};
+const LEGACY_REGION_NAMES = { west: '서쪽 어촌', north: '북쪽 산호섬', east: '동쪽 무역로', south: '남쪽 진주만', cape: '끝섬 곶' };
 
 const round10 = (n) => Math.round(n / 10) * 10;
 const round5 = (n) => Math.round(n / 5) * 5;
@@ -61,16 +104,26 @@ export function portNumbers(price) {
     price,
     upgrade,
     toll: ECONOMY.tollRate.map(r => round5(price * r)),
-    buyback: [0, 1, 2].map(lv => round5((price + upgrade * lv) * ECONOMY.buybackRate)),
+    buyback: ECONOMY.tollRate.map((_, lv) => round5((price + upgrade * lv) * ECONOMY.buybackRate)),
   };
 }
 
-export const TILES = LAYOUT.map(([type, name, price, region], i) => ({
-  i, type, name, short: shortName(name),
+export const TILES = LAYOUT.map(([type, , price, region], i) => ({
+  i, type, name: WORLD_NAMES[i], short: shortName(WORLD_NAMES[i]), country: PORT_COUNTRIES[WORLD_NAMES[i]],
   ...(type === 'port' ? { region, ...portNumbers(price) } : {}),
 }));
 export const BOARD_SIZE = TILES.length;
+export const LEGACY_BOARD_SIZE = 24;
 export const PORT_IDS = TILES.filter(t => t.type === 'port').map(t => t.i);
+export const REGION_PORTS = Object.fromEntries(Object.keys(REGIONS).map(region => [region, PORT_IDS.filter(i => TILES[i].region === region)]));
+export const boardSizeOf = g => g.boardSize ?? LEGACY_BOARD_SIZE;
+export const levelLimit = g => boardSizeOf(g) === LEGACY_BOARD_SIZE ? 2 : ECONOMY.maxLevel;
+const LEGACY_TILES = TILES.slice(0, LEGACY_BOARD_SIZE).map((t, i) => {
+  const name = LAYOUT[i][1];
+  return { ...t, name, short: shortName(name), country: undefined };
+});
+export const tilesOf = g => g.boardSize ? TILES : LEGACY_TILES;
+export const regionNameOf = (g, region) => g.boardSize ? REGIONS[region].name : LEGACY_REGION_NAMES[region];
 
 function shortName(name) {
   return name.replace(/(화물시장|출항지|해역|해협|바다|목)$/, '').replace(/(항|포구|부두|만|곶)$/, '').trim() || name;
@@ -129,4 +182,7 @@ export const DEFAULT_ACTION_TEXT = {
   upgrade: '지나가기',
   market: '지나가기',
   settle: '환매가가 가장 낮은 항구 매각',
+  takeover: '인수 없이 출항',
+  charter: '쾌속선 이용 없이 출항',
+  shelter: '주사위로 탈출 시도',
 };
