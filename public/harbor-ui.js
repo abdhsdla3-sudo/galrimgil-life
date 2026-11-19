@@ -363,9 +363,9 @@ export class HarborScreen {
     if (g.phase === 'over') return put(this.detail);
     const pid = g.pending.pid;
     const p = this.P(pid);
-    const i = this.disp[pid] ?? p.pos;
+    const i = p.pos;
     const me = this.P(this.me);
-    const here = g.players.filter(x => !x.bankrupt && this.disp[x.id] === i);
+    const here = g.players.filter(x => !x.bankrupt && x.pos === i);
     put(this.detail,
       h('h2', '현재 칸'),
       this.tileInfo(i, { compact: true }),
