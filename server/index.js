@@ -36,7 +36,7 @@ export function startServer({ port = Number(process.env.PORT) || 3000, host = pr
     return arr.length > max;
   };
 
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json' };
+  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json' };
   const sendFile = (res, file) => {
     fs.readFile(file, (e, buf) => {
       if (e) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('없는 파일입니다.'); }
@@ -71,6 +71,11 @@ export function startServer({ port = Number(process.env.PORT) || 3000, host = pr
           say('방 생성', r.roomId.slice(0, 4) + '…');
           return json(res, 200, r);
         }
+        const cm = p.match(/^\/api\/codes\/([^/]{1,16})$/);
+        if (cm && req.method === 'GET') {
+          if (limited(ip, 'code', 40, 60e3)) throw new RoomError('번호 확인을 너무 많이 했습니다. 1분 뒤 다시 시도하세요.', 429);
+          return json(res, 200, rooms.lookupCode(decodeURIComponent(cm[1])));
+        }
         const m = p.match(/^\/api\/rooms\/([A-Za-z0-9_-]{8,32})(?:\/([a-z]+))?$/);
         if (!m) throw new RoomError('없는 주소입니다.', 404);
         const [, id, sub] = m;
@@ -101,6 +106,7 @@ export function startServer({ port = Number(process.env.PORT) || 3000, host = pr
       }
       // 정적 파일
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new RoomError('허용되지 않는 요청', 405);
+      if (p === '/assets/manifest.json') return json(res, 200, assetManifest(path.join(ROOT, 'public', 'assets')));
       if (p === '/' || /^\/r\/[A-Za-z0-9_-]+$/.test(p)) return sendFile(res, path.join(ROOT, 'public', 'index.html'));
       const base = p.startsWith('/game/') ? path.join(ROOT, 'game') : path.join(ROOT, 'public');
       const rel = p.startsWith('/game/') ? p.slice(6) : p.slice(1);
@@ -108,7 +114,7 @@ export function startServer({ port = Number(process.env.PORT) || 3000, host = pr
       if (!file.startsWith(base + path.sep)) throw new RoomError('잘못된 경로', 400);
       return sendFile(res, file);
     } catch (e) {
-      if (e instanceof RoomError) return json(res, e.status, { ok: false, error: e.message });
+      if (e instanceof RoomError) return json(res, e.status, { ok: false, error: e.message, ...(e.reason && { reason: e.reason }) });
       console.error(e);
       return json(res, 500, { ok: false, error: '서버 오류가 발생했습니다.' });
     }
@@ -120,6 +126,13 @@ export function startServer({ port = Number(process.env.PORT) || 3000, host = pr
     say(`갈림길 인생 서버 실행: http://localhost:${server.address().port}`);
     resolve({ server, rooms, port: server.address().port, close: () => new Promise(r => { clearInterval(timer); for (const s of streams.values()) for (const res of s) res.end(); server.closeAllConnections?.(); server.close(r); }) });
   }));
+}
+
+// public/assets 아래 실제로 있는 이미지 목록. 이미지가 없으면 화면은 대체 그림을 쓴다.
+export function assetManifest(dir) {
+  let files = [];
+  try { files = fs.readdirSync(dir, { recursive: true }).map(f => String(f).replace(/\\/g, '/')).filter(f => /\.(png|webp|jpg)$/.test(f)); } catch { /* 폴더 없음 */ }
+  return { files: files.map(f => '/assets/' + f).sort() };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

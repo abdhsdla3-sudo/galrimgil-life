@@ -541,7 +541,8 @@ export class GameScreen {
       )),
       h('div.row',
         isHost ? h('button.primary', { onclick: () => this.d.send('rematch') }, '같은 멤버로 다시 하기') : h('p.small', '방장이 "다시 하기"를 누르면 같은 방 대기실로 돌아갑니다.'),
-        h('button', { onclick: () => copyText(r.map(x => `${x.rank}위 ${x.name} ${x.total} — ${x.summary}`).join('\n')) }, '결과 복사')),
+        h('button', { onclick: () => copyText(r.map(x => `${x.rank}위 ${x.name} ${x.total} — ${x.summary}`).join('\n')) }, '결과 복사'),
+        h('button', { onclick: () => this.d.leaveToHome() }, '게임 선택으로')),
     );
     modal(body, { wide: true });
   }

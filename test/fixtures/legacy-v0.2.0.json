@@ -1,0 +1,957 @@
+{
+ "note": "v0.2.0 코드(git c242776)로 만든 업데이트 전 저장 데이터. 게임 종류·입장번호 필드 없음.",
+ "password": "old1",
+ "host": {
+  "roomId": "zJcPwiTqHrHP61lY",
+  "memberId": "m3VNe7B-U",
+  "token": "rXp34St5pxXBbQ_HDtX-jOZsP1vZ9BO8"
+ },
+ "guest": {
+  "roomId": "zJcPwiTqHrHP61lY",
+  "memberId": "mMSVESAnn",
+  "token": "EzXdth50ymKgoOSFK_0SHujAzZLemibQ"
+ },
+ "room": {
+  "schema": 1,
+  "id": "zJcPwiTqHrHP61lY",
+  "version": 16,
+  "createdAt": 1795068911547,
+  "updatedAt": 1795068911603,
+  "status": "playing",
+  "password": {
+   "salt": "754c726780fe386c583c500a73c5ff4a",
+   "hash": "1e611c0374815545705268ea416e3d5b9cb6b91f5521da37a1c05b78af16881c"
+  },
+  "capacity": 4,
+  "locked": true,
+  "hostId": "m3VNe7B-U",
+  "settings": {
+   "preset": "short",
+   "startStage": "adult",
+   "lengths": {
+    "growth": 12,
+    "early": 16,
+    "late": 16
+   },
+   "packs": {
+    "extraJobs": false,
+    "special": false,
+    "joint": true,
+    "extra": false
+   },
+   "speed": "normal",
+   "skipRepeat": false,
+   "timeLimit": 0
+  },
+  "members": [
+   {
+    "id": "m3VNe7B-U",
+    "name": "예전방장",
+    "tokenHash": "1308d1eb88e20afbec79602823869066578372989582bf0b14c43a46514e7e15",
+    "ready": true,
+    "joinedAt": 1795068911547,
+    "lastSeen": 1795068911603
+   },
+   {
+    "id": "mMSVESAnn",
+    "name": "예전친구",
+    "tokenHash": "aaae0bf171c1f594fac78c11a2937541cec6a61d2d2bc1f8747b9aeda3d7d26a",
+    "ready": true,
+    "joinedAt": 1795068911599,
+    "lastSeen": 1795068911603
+   }
+  ],
+  "game": {
+   "schema": 1,
+   "seed": 1560676872,
+   "rng": {
+    "s": 2312818636,
+    "n": 52
+   },
+   "settings": {
+    "preset": "short",
+    "startStage": "adult",
+    "lengths": {
+     "growth": 12,
+     "early": 16,
+     "late": 16
+    },
+    "packs": {
+     "extraJobs": false,
+     "special": false,
+     "joint": true,
+     "extra": false
+    },
+    "speed": "normal",
+    "skipRepeat": false,
+    "timeLimit": 0
+   },
+   "board": {
+    "nodes": {
+     "n0": {
+      "id": "n0",
+      "type": "start",
+      "stage": "early",
+      "next": [
+       "n1"
+      ],
+      "label": "사회 첫걸음",
+      "x": 58,
+      "y": 60
+     },
+     "n1": {
+      "id": "n1",
+      "type": "love",
+      "stage": "early",
+      "next": [
+       "n2"
+      ],
+      "x": 134,
+      "y": 60
+     },
+     "n2": {
+      "id": "n2",
+      "type": "shop",
+      "stage": "early",
+      "next": [
+       "n3"
+      ],
+      "x": 210,
+      "y": 60
+     },
+     "n3": {
+      "id": "n3",
+      "type": "study",
+      "stage": "early",
+      "next": [
+       "n4"
+      ],
+      "x": 286,
+      "y": 60
+     },
+     "n4": {
+      "id": "n4",
+      "type": "event",
+      "stage": "early",
+      "next": [
+       "n5"
+      ],
+      "x": 362,
+      "y": 60
+     },
+     "n5": {
+      "id": "n5",
+      "type": "payday",
+      "stage": "early",
+      "next": [
+       "n6"
+      ],
+      "x": 438,
+      "y": 60
+     },
+     "n6": {
+      "id": "n6",
+      "type": "event",
+      "stage": "early",
+      "next": [
+       "n7"
+      ],
+      "x": 514,
+      "y": 60
+     },
+     "n7": {
+      "id": "n7",
+      "type": "lucky",
+      "stage": "early",
+      "next": [
+       "n8"
+      ],
+      "x": 590,
+      "y": 60
+     },
+     "n8": {
+      "id": "n8",
+      "type": "job",
+      "stage": "early",
+      "next": [
+       "n9"
+      ],
+      "x": 666,
+      "y": 60
+     },
+     "n9": {
+      "id": "n9",
+      "type": "card",
+      "stage": "early",
+      "next": [
+       "n10",
+       "n13"
+      ],
+      "branch": [
+       {
+        "to": "n10",
+        "label": "일 중심 길",
+        "desc": "직장·배움 칸",
+        "effects": []
+       },
+       {
+        "to": "n13",
+        "label": "사람 중심 길",
+        "desc": "인연·마켓 칸",
+        "effects": []
+       }
+      ],
+      "x": 742,
+      "y": 60
+     },
+     "n10": {
+      "id": "n10",
+      "type": "job",
+      "stage": "early",
+      "next": [
+       "n11"
+      ],
+      "lane": "일 중심 길",
+      "x": 818,
+      "y": 198
+     },
+     "n11": {
+      "id": "n11",
+      "type": "study",
+      "stage": "early",
+      "next": [
+       "n12"
+      ],
+      "lane": "일 중심 길",
+      "x": 742,
+      "y": 198
+     },
+     "n12": {
+      "id": "n12",
+      "type": "job",
+      "stage": "early",
+      "next": [
+       "n16"
+      ],
+      "lane": "일 중심 길",
+      "x": 666,
+      "y": 198
+     },
+     "n13": {
+      "id": "n13",
+      "type": "love",
+      "stage": "early",
+      "next": [
+       "n14"
+      ],
+      "lane": "사람 중심 길",
+      "x": 818,
+      "y": 302
+     },
+     "n14": {
+      "id": "n14",
+      "type": "shop",
+      "stage": "early",
+      "next": [
+       "n15"
+      ],
+      "lane": "사람 중심 길",
+      "x": 742,
+      "y": 302
+     },
+     "n15": {
+      "id": "n15",
+      "type": "love",
+      "stage": "early",
+      "next": [
+       "n16"
+      ],
+      "lane": "사람 중심 길",
+      "x": 666,
+      "y": 302
+     },
+     "n16": {
+      "id": "n16",
+      "type": "payday",
+      "stage": "early",
+      "next": [
+       "n17"
+      ],
+      "x": 590,
+      "y": 250
+     },
+     "n17": {
+      "id": "n17",
+      "type": "risk",
+      "stage": "early",
+      "next": [
+       "n18"
+      ],
+      "x": 514,
+      "y": 250
+     },
+     "n18": {
+      "id": "n18",
+      "type": "job",
+      "stage": "early",
+      "next": [
+       "n19"
+      ],
+      "x": 438,
+      "y": 250
+     },
+     "n19": {
+      "id": "n19",
+      "type": "together",
+      "stage": "early",
+      "next": [
+       "n20"
+      ],
+      "x": 362,
+      "y": 250
+     },
+     "n20": {
+      "id": "n20",
+      "type": "love",
+      "stage": "early",
+      "next": [
+       "n21"
+      ],
+      "x": 286,
+      "y": 250
+     },
+     "n21": {
+      "id": "n21",
+      "type": "payday",
+      "stage": "early",
+      "next": [
+       "n22"
+      ],
+      "x": 210,
+      "y": 250
+     },
+     "n22": {
+      "id": "n22",
+      "type": "job",
+      "stage": "early",
+      "next": [
+       "n23"
+      ],
+      "x": 134,
+      "y": 250
+     },
+     "n23": {
+      "id": "n23",
+      "type": "gate",
+      "stage": "late",
+      "next": [
+       "n24"
+      ],
+      "gate": "midlife",
+      "stop": true,
+      "label": "인생 중간 점검",
+      "x": 58,
+      "y": 250
+     },
+     "n24": {
+      "id": "n24",
+      "type": "job",
+      "stage": "late",
+      "next": [
+       "n25"
+      ],
+      "x": 58,
+      "y": 440
+     },
+     "n25": {
+      "id": "n25",
+      "type": "love",
+      "stage": "late",
+      "next": [
+       "n26"
+      ],
+      "x": 134,
+      "y": 440
+     },
+     "n26": {
+      "id": "n26",
+      "type": "shop",
+      "stage": "late",
+      "next": [
+       "n27"
+      ],
+      "x": 210,
+      "y": 440
+     },
+     "n27": {
+      "id": "n27",
+      "type": "event",
+      "stage": "late",
+      "next": [
+       "n28"
+      ],
+      "x": 286,
+      "y": 440
+     },
+     "n28": {
+      "id": "n28",
+      "type": "payday",
+      "stage": "late",
+      "next": [
+       "n29"
+      ],
+      "x": 362,
+      "y": 440
+     },
+     "n29": {
+      "id": "n29",
+      "type": "together",
+      "stage": "late",
+      "next": [
+       "n30"
+      ],
+      "x": 438,
+      "y": 440
+     },
+     "n30": {
+      "id": "n30",
+      "type": "card",
+      "stage": "late",
+      "next": [
+       "n31"
+      ],
+      "x": 514,
+      "y": 440
+     },
+     "n31": {
+      "id": "n31",
+      "type": "job",
+      "stage": "late",
+      "next": [
+       "n32"
+      ],
+      "x": 590,
+      "y": 440
+     },
+     "n32": {
+      "id": "n32",
+      "type": "risk",
+      "stage": "late",
+      "next": [
+       "n33",
+       "n36"
+      ],
+      "branch": [
+       {
+        "to": "n33",
+        "label": "일 중심 길",
+        "desc": "직장·배움 칸",
+        "effects": []
+       },
+       {
+        "to": "n36",
+        "label": "사람 중심 길",
+        "desc": "인연·마켓 칸",
+        "effects": []
+       }
+      ],
+      "x": 666,
+      "y": 440
+     },
+     "n33": {
+      "id": "n33",
+      "type": "job",
+      "stage": "late",
+      "next": [
+       "n34"
+      ],
+      "lane": "일 중심 길",
+      "x": 818,
+      "y": 578
+     },
+     "n34": {
+      "id": "n34",
+      "type": "study",
+      "stage": "late",
+      "next": [
+       "n35"
+      ],
+      "lane": "일 중심 길",
+      "x": 742,
+      "y": 578
+     },
+     "n35": {
+      "id": "n35",
+      "type": "job",
+      "stage": "late",
+      "next": [
+       "n39"
+      ],
+      "lane": "일 중심 길",
+      "x": 666,
+      "y": 578
+     },
+     "n36": {
+      "id": "n36",
+      "type": "love",
+      "stage": "late",
+      "next": [
+       "n37"
+      ],
+      "lane": "사람 중심 길",
+      "x": 818,
+      "y": 682
+     },
+     "n37": {
+      "id": "n37",
+      "type": "shop",
+      "stage": "late",
+      "next": [
+       "n38"
+      ],
+      "lane": "사람 중심 길",
+      "x": 742,
+      "y": 682
+     },
+     "n38": {
+      "id": "n38",
+      "type": "love",
+      "stage": "late",
+      "next": [
+       "n39"
+      ],
+      "lane": "사람 중심 길",
+      "x": 666,
+      "y": 682
+     },
+     "n39": {
+      "id": "n39",
+      "type": "payday",
+      "stage": "late",
+      "next": [
+       "n40"
+      ],
+      "x": 590,
+      "y": 630
+     },
+     "n40": {
+      "id": "n40",
+      "type": "study",
+      "stage": "late",
+      "next": [
+       "n41"
+      ],
+      "x": 514,
+      "y": 630
+     },
+     "n41": {
+      "id": "n41",
+      "type": "event",
+      "stage": "late",
+      "next": [
+       "n42"
+      ],
+      "x": 438,
+      "y": 630
+     },
+     "n42": {
+      "id": "n42",
+      "type": "love",
+      "stage": "late",
+      "next": [
+       "n43"
+      ],
+      "x": 362,
+      "y": 630
+     },
+     "n43": {
+      "id": "n43",
+      "type": "lucky",
+      "stage": "late",
+      "next": [
+       "n44"
+      ],
+      "x": 286,
+      "y": 630
+     },
+     "n44": {
+      "id": "n44",
+      "type": "payday",
+      "stage": "late",
+      "next": [
+       "n45"
+      ],
+      "x": 210,
+      "y": 630
+     },
+     "n45": {
+      "id": "n45",
+      "type": "love",
+      "stage": "late",
+      "next": [
+       "n46"
+      ],
+      "x": 134,
+      "y": 630
+     },
+     "n46": {
+      "id": "n46",
+      "type": "goal",
+      "stage": "late",
+      "next": [],
+      "gate": "goal",
+      "stop": true,
+      "label": "은퇴",
+      "x": 58,
+      "y": 630
+     }
+    },
+    "start": "n0",
+    "width": 876,
+    "height": 772
+   },
+   "players": [
+    {
+     "id": "m3VNe7B-U",
+     "name": "예전방장",
+     "color": "#e4572e",
+     "mark": "●",
+     "pos": "n1",
+     "stats": {
+      "social": 5,
+      "body": 3,
+      "smart": 3,
+      "sense": 2
+     },
+     "cash": 160,
+     "debt": 0,
+     "assets": [],
+     "job": {
+      "id": "nurse",
+      "rank": 0,
+      "xp": 0,
+      "fails": 0
+     },
+     "jobHistory": [],
+     "degree": false,
+     "relation": {
+      "state": "met",
+      "partner": "배은솔",
+      "affection": 1
+     },
+     "children": [],
+     "childBoost": 0,
+     "pet": false,
+     "memories": 0,
+     "cards": [],
+     "statuses": [],
+     "flags": {},
+     "chain": [],
+     "seen": {
+      "a_love_meet": 0
+     },
+     "finished": false,
+     "finishOrder": 0,
+     "turns": 1,
+     "record": [
+      "배경: 사회 경험파",
+      "간호사(으)로 사회생활 시작"
+     ],
+     "unempPaydays": 0,
+     "turnBuff": {},
+     "lastHelp": -99
+    },
+    {
+     "id": "mMSVESAnn",
+     "name": "예전친구",
+     "color": "#2e86ab",
+     "mark": "▲",
+     "pos": "n7",
+     "stats": {
+      "social": 5,
+      "body": 3,
+      "smart": 3,
+      "sense": 2
+     },
+     "cash": 251,
+     "debt": 0,
+     "assets": [],
+     "job": {
+      "id": "nurse",
+      "rank": 1,
+      "xp": 0,
+      "fails": 0
+     },
+     "jobHistory": [],
+     "degree": false,
+     "relation": {
+      "state": "single",
+      "partner": null,
+      "affection": 0
+     },
+     "children": [],
+     "childBoost": 0,
+     "pet": false,
+     "memories": 0,
+     "cards": [],
+     "statuses": [],
+     "flags": {},
+     "chain": [],
+     "seen": {
+      "a_lucky_bonus": 1
+     },
+     "finished": false,
+     "finishOrder": 0,
+     "turns": 1,
+     "record": [
+      "배경: 사회 경험파",
+      "간호사(으)로 사회생활 시작",
+      "간호사 일반(으)로 승진"
+     ],
+     "unempPaydays": 0,
+     "turnBuff": {},
+     "lastHelp": -99
+    }
+   ],
+   "order": [
+    "mMSVESAnn",
+    "m3VNe7B-U"
+   ],
+   "turnIdx": 0,
+   "round": 2,
+   "phase": "play",
+   "pending": {
+    "kind": "confirm",
+    "pid": "mMSVESAnn",
+    "title": "예전친구 — 특별 상여금",
+    "text": "회사 실적이 좋아 특별 상여금이 나왔다.",
+    "lines": [
+     "이동 2칸 (주사위 2)",
+     "현금 +42 (특별 상여(월급 1회분): 월급 42)"
+    ],
+    "id": 10
+   },
+   "pendingSeq": 10,
+   "log": [
+    {
+     "seq": 1,
+     "round": 1,
+     "pid": null,
+     "text": "게임 준비 시작",
+     "kind": "system",
+     "changes": []
+    },
+    {
+     "seq": 2,
+     "round": 1,
+     "pid": "m3VNe7B-U",
+     "text": "예전방장 첫 직업",
+     "kind": "event",
+     "changes": [
+      "직업: 간호사 (신규)"
+     ]
+    },
+    {
+     "seq": 3,
+     "round": 1,
+     "pid": "mMSVESAnn",
+     "text": "예전친구 첫 직업",
+     "kind": "event",
+     "changes": [
+      "직업: 간호사 (신규)"
+     ]
+    },
+    {
+     "seq": 4,
+     "round": 1,
+     "pid": null,
+     "text": "순서 주사위 결과 — 예전방장 4 · 예전친구 6",
+     "kind": "system",
+     "changes": []
+    },
+    {
+     "seq": 5,
+     "round": 1,
+     "pid": null,
+     "text": "차례 순서: 예전친구 → 예전방장",
+     "kind": "system",
+     "changes": []
+    },
+    {
+     "seq": 6,
+     "round": 1,
+     "pid": "mMSVESAnn",
+     "text": "예전친구 — 월급날 칸",
+     "kind": "event",
+     "changes": [
+      "이동 5칸 (주사위 5)",
+      "현금 +49 (월급날: 월급 33, 정확히 도착 보너스 16)",
+      "승진: 간호사 일반"
+     ]
+    },
+    {
+     "seq": 7,
+     "round": 1,
+     "pid": "m3VNe7B-U",
+     "text": "예전방장 — 새로운 만남 · 친구 소개로 배은솔님을 만났다.",
+     "kind": "event",
+     "changes": [
+      "이동 1칸 (주사위 1)",
+      "선택: 연락처를 교환한다",
+      "배은솔님을 알게 되었다",
+      "배은솔 호감도 +1 → 1"
+     ]
+    },
+    {
+     "seq": 8,
+     "round": 2,
+     "pid": "mMSVESAnn",
+     "text": "예전친구 — 특별 상여금 · 회사 실적이 좋아 특별 상여금이 나왔다.",
+     "kind": "event",
+     "changes": [
+      "이동 2칸 (주사위 2)",
+      "현금 +42 (특별 상여(월급 1회분): 월급 42)"
+     ]
+    }
+   ],
+   "logSeq": 8,
+   "feed": [
+    {
+     "seq": 1,
+     "pid": null,
+     "title": "첫 직업 결정",
+     "text": "",
+     "lines": [
+      "예전방장: 간호사",
+      "예전친구: 간호사"
+     ],
+     "kind": "system"
+    },
+    {
+     "seq": 2,
+     "pid": "mMSVESAnn",
+     "title": "예전친구 — 월급날 칸",
+     "text": "",
+     "lines": [
+      "이동 5칸 (주사위 5)",
+      "현금 +49 (월급날: 월급 33, 정확히 도착 보너스 16)",
+      "승진: 간호사 일반"
+     ],
+     "kind": "event"
+    },
+    {
+     "seq": 3,
+     "pid": "m3VNe7B-U",
+     "title": "예전방장 — 새로운 만남",
+     "text": "친구 소개로 배은솔님을 만났다.",
+     "lines": [
+      "이동 1칸 (주사위 1)",
+      "선택: 연락처를 교환한다",
+      "배은솔님을 알게 되었다",
+      "배은솔 호감도 +1 → 1"
+     ],
+     "kind": "event"
+    },
+    {
+     "seq": 4,
+     "pid": "mMSVESAnn",
+     "title": "예전친구 — 특별 상여금",
+     "text": "회사 실적이 좋아 특별 상여금이 나왔다.",
+     "lines": [
+      "이동 2칸 (주사위 2)",
+      "현금 +42 (특별 상여(월급 1회분): 월급 42)"
+     ],
+     "kind": "event"
+    }
+   ],
+   "feedSeq": 4,
+   "finishCount": 0,
+   "results": null,
+   "jointCount": 0,
+   "orderRolls": {
+    "m3VNe7B-U": [
+     4
+    ],
+    "mMSVESAnn": [
+     6
+    ]
+   },
+   "lastRoll": {
+    "pid": "mMSVESAnn",
+    "v": 2,
+    "text": "주사위 2",
+    "seq": 9
+   }
+  },
+  "notices": [
+   {
+    "t": 1795068911599,
+    "text": "예전친구 님이 참가했습니다."
+   },
+   {
+    "t": 1795068911601,
+    "text": "게임이 시작되었습니다!"
+   }
+  ],
+  "processed": {
+   "mMSVESAnn": [],
+   "m3VNe7B-U": []
+  },
+  "deadline": null,
+  "boardId": "Um-tF2di"
+ },
+ "lobbyPassword": "pw99",
+ "lobby": {
+  "schema": 1,
+  "id": "Cb7TEY530iKBrOTV",
+  "version": 1,
+  "createdAt": 1795068911603,
+  "updatedAt": 1795068911628,
+  "status": "lobby",
+  "password": {
+   "salt": "3594072c5fe549fee0649ff18487cf62",
+   "hash": "d5136076c2b015d3e2900a1660c2ca7d3702cd6a829e038f0c53ba12e62e788b"
+  },
+  "capacity": 3,
+  "locked": false,
+  "hostId": "mTyc0PJw1",
+  "settings": {
+   "preset": "standard",
+   "startStage": "growth",
+   "lengths": {
+    "growth": 16,
+    "early": 25,
+    "late": 23
+   },
+   "packs": {
+    "extraJobs": true,
+    "special": false,
+    "joint": true,
+    "extra": true
+   },
+   "speed": "normal",
+   "skipRepeat": false,
+   "timeLimit": 0
+  },
+  "members": [
+   {
+    "id": "mTyc0PJw1",
+    "name": "대기방장",
+    "tokenHash": "d7028654766791335a442a612e63fdf7d0950fc6c33c57d36b796ed6de3d08b5",
+    "ready": true,
+    "joinedAt": 1795068911603,
+    "lastSeen": 1795068911603
+   }
+  ],
+  "game": null,
+  "notices": [],
+  "processed": {},
+  "deadline": null,
+  "boardId": null
+ },
+ "lobbyHost": {
+  "roomId": "Cb7TEY530iKBrOTV",
+  "memberId": "mTyc0PJw1",
+  "token": "q0ykjZ5FW9Zc84HrbeSa2IwA0y0x3nI4"
+ }
+}

@@ -1,5 +1,5 @@
-import { RoomManager, RoomError, ROOM_SCHEMA } from './rooms.js';
-import { restoreGame, SCHEMA_VERSION } from '../game/engine.js';
+import { RoomManager, RoomError, ROOM_SCHEMA, CODE_HOLD_MS, isRoomCode, randomCode } from './rooms.js';
+import { gameOf } from './games.js';
 import assets from 'sites-assets';
 
 const EXPIRY = { lobby: 86400e3, playing: 30 * 86400e3, over: 3 * 86400e3 };
@@ -7,12 +7,14 @@ const HEARTBEAT_MS = 15000;
 const ONLINE_MS = 35000;
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 const json = (body, status = 200) => Response.json(body, { status, headers: HEADERS });
-const fail = (message, status = 400) => { throw new RoomError(message, status); };
+const fail = (message, status = 400, reason) => { throw new RoomError(message, status, reason); };
 
 class HostedRooms extends RoomManager {
   isOnline(room, id) {
     return room.members.some(m => m.id === id && this.now() - m.lastSeen < ONLINE_MS);
   }
+  // D1 의 room_codes 기본 키가 사이트 전체 고유성을 보장한다. 충돌하면 생성 쪽에서 다시 뽑는다.
+  allocCode() { return randomCode(); }
 }
 
 async function readBody(request) {
@@ -42,13 +44,16 @@ async function limit(db, key, max, windowMs, now) {
   if (hits > max) fail('요청이 너무 많습니다. 잠시 후 다시 시도하세요.', 429);
 }
 
+// 방 하나를 읽고 → 처리하고 → revision 이 같을 때만 저장한다(낙관적 잠금).
+// 동시에 들어온 입장·행동은 충돌하면 최신 상태로 다시 처리되므로 정원 초과·중복 적용이 생기지 않는다.
 async function roomRequest(db, id, action, now) {
   for (let attempt = 0; attempt < 12; attempt++) {
     const row = await db.prepare('SELECT revision, state FROM rooms WHERE id = ? AND expires_at > ?').bind(id, now).first();
-    if (!row) fail('방을 찾을 수 없습니다. 링크를 확인하거나 만료되었는지 확인하세요.', 404);
+    if (!row) fail('방을 찾을 수 없습니다. 링크를 확인하거나 만료되었는지 확인하세요.', 404, 'not_found');
     const room = JSON.parse(row.state);
-    if (room.schema !== ROOM_SCHEMA || (room.game && room.game.schema !== SCHEMA_VERSION)) fail('저장 형식 버전이 다릅니다.', 410);
-    restoreGame(room.game);
+    const { engine } = gameOf(room);
+    if (room.schema !== ROOM_SCHEMA || (room.game && room.game.schema !== engine.SCHEMA_VERSION)) fail('저장 형식 버전이 다릅니다.', 410, 'expired');
+    engine.restoreGame(room.game);
     const manager = new HostedRooms({ now: () => now });
     manager.rooms.set(id, room);
     const result = action(manager, room);
@@ -59,9 +64,46 @@ async function roomRequest(db, id, action, now) {
       ? db.prepare('UPDATE rooms SET revision = revision + 1, expires_at = ?, state = ? WHERE id = ? AND revision = ?')
         .bind(Math.max(room.updatedAt, ...room.members.map(m => m.lastSeen)) + EXPIRY[room.status], state, id, row.revision)
       : db.prepare('DELETE FROM rooms WHERE id = ? AND revision = ?').bind(id, row.revision);
-    if ((await write.run()).meta.changes === 1) return result;
+    if ((await write.run()).meta.changes === 1) {
+      // 닫힌 방의 번호는 일정 기간 '만료'로 안내하고 재발급하지 않는다.
+      if (!exists) await db.prepare('UPDATE room_codes SET hold_until = ? WHERE room_id = ?').bind(now + CODE_HOLD_MS, id).run();
+      return result;
+    }
   }
   fail('동시에 여러 요청이 들어왔습니다. 다시 시도해 주세요.', 409);
+}
+
+async function createRoom(db, body, now) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const manager = new HostedRooms({ now: () => now });
+    const result = manager.create(body);
+    const room = manager.get(result.roomId);
+    try {
+      await db.batch([
+        db.prepare('DELETE FROM rooms WHERE expires_at <= ?').bind(now),
+        db.prepare('DELETE FROM room_limits WHERE expires_at <= ?').bind(now),
+        db.prepare('DELETE FROM room_codes WHERE hold_until <= ? AND room_id NOT IN (SELECT id FROM rooms)').bind(now),
+        db.prepare('INSERT INTO rooms (id, expires_at, state) VALUES (?, ?, ?)').bind(room.id, now + EXPIRY.lobby, JSON.stringify(room)),
+        db.prepare('INSERT INTO room_codes (code, room_id, game_type, hold_until) VALUES (?, ?, ?, ?)').bind(room.code, room.id, room.gameType, now + CODE_HOLD_MS),
+      ]);
+      return result;
+    } catch (error) {
+      if (!/UNIQUE|constraint/i.test(String(error?.message))) throw error; // 번호 충돌만 재시도
+    }
+  }
+  fail('지금은 방 번호를 발급할 수 없습니다. 잠시 후 다시 시도하세요.', 503);
+}
+
+async function lookupCode(db, code, now) {
+  if (!isRoomCode(code)) fail('입장번호는 숫자 6자리입니다.', 400, 'bad_code');
+  const row = await db.prepare('SELECT room_id FROM room_codes WHERE code = ?').bind(code).first();
+  if (!row) fail('이 번호의 방이 없습니다. 숫자 6자리를 다시 확인해 주세요.', 404, 'not_found');
+  try {
+    return await roomRequest(db, row.room_id, (manager) => ({ roomId: row.room_id, ...manager.info(row.room_id) }), now);
+  } catch (error) {
+    if (error instanceof RoomError && error.status === 404) fail('이 번호의 방은 닫혔거나 만료되었습니다. 방장에게 새 번호를 받아 주세요.', 410, 'expired');
+    throw error;
+  }
 }
 
 async function api(request, url, db) {
@@ -71,15 +113,12 @@ async function api(request, url, db) {
   const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
   if (url.pathname === '/api/rooms' && method === 'POST') {
     await limit(db, 'create:' + ip, 20, 3600e3, now);
-    const manager = new HostedRooms({ now: () => now });
-    const result = manager.create(await readBody(request));
-    const room = manager.get(result.roomId);
-    await db.batch([
-      db.prepare('DELETE FROM rooms WHERE expires_at <= ?').bind(now),
-      db.prepare('DELETE FROM room_limits WHERE expires_at <= ?').bind(now),
-      db.prepare('INSERT INTO rooms (id, expires_at, state) VALUES (?, ?, ?)').bind(room.id, now + EXPIRY.lobby, JSON.stringify(room)),
-    ]);
-    return json(result);
+    return json(await createRoom(db, await readBody(request), now));
+  }
+  const codeMatch = /^\/api\/codes\/([^/]{1,16})$/.exec(url.pathname);
+  if (codeMatch && method === 'GET') {
+    await limit(db, 'code:' + ip, 40, 60e3, now);
+    return json(await lookupCode(db, decodeURIComponent(codeMatch[1]), now));
   }
   const match = /^\/api\/rooms\/([A-Za-z0-9_-]{8,32})(?:\/([a-z]+))?$/.exec(url.pathname);
   if (!match) fail('없는 주소입니다.', 404);
@@ -104,6 +143,13 @@ async function api(request, url, db) {
   }, now));
 }
 
+const binaryCache = new Map();
+function assetBody([, body, encoding], path) {
+  if (encoding !== 'base64') return body;
+  if (!binaryCache.has(path)) binaryCache.set(path, Uint8Array.from(atob(body), c => c.charCodeAt(0)));
+  return binaryCache.get(path);
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -116,10 +162,10 @@ export default {
       if (!['GET', 'HEAD'].includes(request.method)) fail('허용되지 않는 요청입니다.', 405);
       const path = url.pathname === '/' || /^\/r\/[A-Za-z0-9_-]{8,32}$/.test(url.pathname) ? '/index.html' : url.pathname;
       if (!Object.hasOwn(assets, path)) fail('없는 주소입니다.', 404);
-      const [type, body] = assets[path];
-      return new Response(request.method === 'HEAD' ? null : body, { headers: { ...HEADERS, 'content-type': type } });
+      const body = assetBody(assets[path], path);
+      return new Response(request.method === 'HEAD' ? null : body, { headers: { ...HEADERS, 'content-type': assets[path][0] } });
     } catch (error) {
-      if (error instanceof RoomError) return json({ ok: false, error: error.message }, error.status);
+      if (error instanceof RoomError) return json({ ok: false, error: error.message, ...(error.reason && { reason: error.reason }) }, error.status);
       console.error(error.message);
       return json({ ok: false, error: '서버 오류가 발생했습니다.' }, 500);
     }
