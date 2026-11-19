@@ -1,5 +1,6 @@
 // 사이트에서 고를 수 있는 게임 목록과 이미지 슬롯 (서버 server/games.js 와 같은 id 사용)
 import { h } from './util.js';
+import { PLAYER_LIMITS } from '/game/harbor/data.js';
 
 export const GAME_META = {
   life: {
@@ -8,8 +9,8 @@ export const GAME_META = {
     card: '/assets/cards/life.png', fallback: 'life',
   },
   harbor: {
-    id: 'harbor', name: '항구의 길', players: '2~4명', min: 2, max: 4, defaultCap: 4,
-    line: '부산에서 출항해 세계 도시의 항구를 운영하고 화물을 배달하세요.',
+    id: 'harbor', name: '항구의 길', players: `${PLAYER_LIMITS.min}~${PLAYER_LIMITS.max}명`, min: PLAYER_LIMITS.min, max: PLAYER_LIMITS.max, defaultCap: PLAYER_LIMITS.default,
+    line: '한국 지역이나 세계 도시를 골라 땅을 사고 화물을 배달하세요.',
     card: '/assets/cards/harbor.png', fallback: 'harbor',
   },
 };

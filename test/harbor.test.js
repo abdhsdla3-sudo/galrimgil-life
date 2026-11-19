@@ -1,13 +1,102 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGame, act, awaiting, defaultActionFor, GameError, P, portsOf, worthOf, tollOf, _internal } from '../game/harbor/engine.js';
-import { TILES, ECONOMY, BOARD_SIZE, PORT_IDS, REGION_PORTS, CONTRACT_RANGES, normalizeHarborSettings } from '../game/harbor/data.js';
+import { TILES, ECONOMY, BOARD_SIZE, PORT_IDS, REGION_PORTS, CONTRACT_RANGES, normalizeHarborSettings, tilesOf, regionNameOf } from '../game/harbor/data.js';
 import { randInt } from '../game/rng.js';
 import { playHarbor } from './harbor-bot.js';
 
 const members = (n) => Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: '선장' + (i + 1) }));
-const fresh = (n = 2, settings = {}) => createGame(members(n), settings, 42);
+const fresh = (n = 2, settings = {}) => {
+  const g = createGame(members(n), settings, 42);
+  while (g.orderDraw) act(g, g.pending.pid, { type: 'roll' });
+  return g;
+};
 const cur = (g) => P(g, g.pending.pid);
+
+test('한국과 세계 테마는 같은 칸 구조에 각 테마의 도시 이름을 고정한다', () => {
+  const korea = fresh(2, { theme: 'korea' });
+  const world = fresh();
+  assert.equal(tilesOf(korea)[0].name, '서울 출발');
+  assert.equal(regionNameOf(korea, 'west'), '수도권');
+  assert.equal(regionNameOf(world, 'west'), '아프리카');
+  assert.ok(tilesOf(korea).filter(t => t.type === 'port').every(t => t.country === '대한민국'));
+  assert.ok(tilesOf(world).filter(t => t.type === 'port').every(t => t.country !== '대한민국'));
+  assert.deepEqual(tilesOf(world).map(t => t.type), tilesOf(korea).map(t => t.type));
+});
+
+test('8명 순서 추첨은 주사위 하나로 높은 눈을 먼저 배치하고 동점자만 다시 굴린다', () => {
+  const g = createGame(members(8), {}, 42);
+  const seedFor = face => Array.from({ length: 100 }, (_, i) => i + 1).find(s => randInt({ s, n: 0 }, 1, 6) === face);
+  const doRoll = face => {
+    g.rng = { s: seedFor(face), n: 0 };
+    act(g, g.pending.pid, { type: 'roll' });
+    assert.deepEqual(g.lastRoll.dice, [face]);
+  };
+  for (const face of [6, 3, 6, 2, 5, 1, 4, 3]) doRoll(face);
+  assert.equal(g.pending.pid, 'p0');
+  doRoll(1);
+  assert.equal(g.pending.pid, 'p2');
+  doRoll(6);
+  assert.equal(g.pending.pid, 'p1');
+  doRoll(5);
+  doRoll(2);
+  assert.deepEqual(g.order, ['p2', 'p0', 'p4', 'p6', 'p1', 'p7', 'p3', 'p5']);
+  assert.equal(g.pending.kind, 'roll');
+  assert.ok(g.players.every(p => p.pos === 0));
+  assert.equal(playHarbor(8, { rounds: 6 }, 70).g.results.length, 8);
+});
+
+test('홀짝 칸은 게임 크레딧 한 번만 정산하며 잘못된 금액과 잔액 초과는 거부한다', () => {
+  const g = fresh(), p = cur(g);
+  p.pos = tilesOf(g).find(t => t.type === 'bet').i;
+  _internal.land(g, p);
+  assert.equal(g.pending.kind, 'bet');
+  assert.throws(() => act(g, p.id, { type: 'bet', amount: 1, choice: 'odd' }), GameError);
+  p.cash = 100;
+  assert.throws(() => act(g, p.id, { type: 'bet', amount: 200, choice: 'odd' }), GameError);
+  const odd = randInt({ ...g.rng }, 1, 6) % 2 === 1;
+  act(g, p.id, { type: 'bet', amount: 50, choice: odd ? 'odd' : 'even' });
+  assert.equal(p.cash, 150);
+  assert.equal(g.pending.kind, 'roll');
+});
+
+test('강한 주사위는 합계 9~12 비율을 높이면서 두 눈 모두 유효하게 유지한다', () => {
+  let high = 0, regular = 0;
+  for (let seed = 1; seed <= 500; seed++) {
+    const g = fresh(), fair = fresh();
+    g.rng = { s: seed * 71371, n: 0 };
+    fair.rng = { ...g.rng };
+    act(g, cur(g).id, { type: 'roll', power: 'strong' });
+    act(fair, cur(fair).id, { type: 'roll' });
+    assert.ok(g.lastRoll.dice.every(n => n >= 1 && n <= 6));
+    if (g.lastRoll.value >= 9) high++;
+    if (fair.lastRoll.value >= 9) regular++;
+  }
+  assert.ok(high > regular + 60);
+});
+
+test('카드에서 받은 인수 방어권은 한 번 자동 소모되고 인수 비용은 차감하지 않는다', () => {
+  const g = fresh(), defender = cur(g), attacker = g.players.find(p => p !== defender);
+  const seed = Array.from({ length: 200 }, (_, i) => i + 1).find(s => {
+    const rng = { s, n: 0 };
+    return randInt(rng, 1, 2) === 1 && randInt(rng, 0, 2) === 0;
+  });
+  g.rng = { s: seed, n: 0 };
+  defender.pos = tilesOf(g).find(t => t.type === 'event').i;
+  _internal.land(g, defender);
+  assert.equal(g.lastCard.name, '인수 방어권');
+  assert.equal(defender.items.deed, 1);
+  g.owners[1] = { pid: defender.id, level: 0 };
+  attacker.pos = 1;
+  _internal.land(g, attacker);
+  assert.equal(g.pending.kind, 'takeover');
+  const cash = attacker.cash;
+  act(g, attacker.id, { type: 'takeover' });
+  assert.equal(attacker.cash, cash);
+  assert.equal(g.owners[1].pid, defender.id);
+  assert.equal(defender.items.deed, 0);
+  assert.ok(g.log.some(l => l.kind === 'defense'));
+});
 
 test('더블은 같은 선장의 추가 굴림, 세 번째 더블은 피난소, 유료 출항으로 복귀', () => {
   const g = fresh();
@@ -283,7 +372,7 @@ test('기본 행동은 항상 유효하다 (시간 초과·연결 끊김 처리�
   }
 });
 
-test('인원 제한: 1명 또는 5명이면 생성 불가', () => {
+test('인원 제한: 1명 또는 9명이면 생성 불가', () => {
   assert.throws(() => createGame(members(1), {}, 1), GameError);
-  assert.throws(() => createGame(members(5), {}, 1), GameError);
+  assert.throws(() => createGame(members(9), {}, 1), GameError);
 });

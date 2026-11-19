@@ -1,8 +1,8 @@
 // 앱 진입점: 라우팅, 서버 통신, 홈(입장번호·게임 선택)/참가/대기실 화면
-import { $, h, toast, modal, copyText, won } from './util.js';
+import { $, h, toast, modal, copyText, won, roomChat } from './util.js';
 import { PRESETS, LENGTH_LIMITS, TIME_LIMITS, SPEEDS, normalizeSettings, presetSettings, defaultSettings, estimateMinutes, stageTurns } from '/game/settings.js';
 import { PACKS } from '/game/content.js';
-import { ROUND_OPTIONS, TIME_OPTIONS, normalizeHarborSettings, defaultHarborSettings } from '/game/harbor/data.js';
+import { ROUND_OPTIONS, TIME_OPTIONS, THEMES, normalizeHarborSettings, defaultHarborSettings } from '/game/harbor/data.js';
 import { GameScreen } from './game-ui.js';
 import { HarborScreen } from './harbor-ui.js';
 import { GAME_META, gameMeta, artSlot } from './games.js';
@@ -219,6 +219,8 @@ export function harborSettingsEditor(settings, editable, onChange) {
   const dis = !editable || undefined;
   const set = (patch) => onChange(normalizeHarborSettings({ ...s, ...patch }));
   return h('div.settings',
+    h('div.field', h('b', '보드 테마'), h('div.seg', ...Object.entries(THEMES).map(([theme, title]) =>
+      h('button' + (s.theme === theme ? '.on' : ''), { type: 'button', disabled: dis, 'aria-pressed': String(s.theme === theme), onclick: () => set({ theme }) }, title)))),
     h('div.field', h('b', '라운드 '), h('div.seg', ...ROUND_OPTIONS.map(n => h('button' + (s.rounds === n ? '.on' : ''), { type: 'button', disabled: dis, 'aria-pressed': String(s.rounds === n), onclick: () => set({ rounds: n }) }, `${n}라운드`))),
       h('div.small', '모든 선장이 한 번씩 차례를 마치면 1라운드. 마지막 라운드가 끝나면 현금 + 항구 환매가로 순위를 정합니다.')),
     h('div.field', h('b', '선택 제한 시간 '), h('div.seg', ...TIME_OPTIONS.map(t => h('button' + (s.timeLimit === t ? '.on' : ''), { type: 'button', disabled: dis, 'aria-pressed': String(s.timeLimit === t), onclick: () => set({ timeLimit: t }) }, `${t}초`))),
@@ -333,9 +335,15 @@ function receiveRoom(room, close = () => S.es?.close()) {
   if (room.id !== S.roomId || room.version < S.lastVersion) return;
   setConn(true);
   if (room.version === S.lastVersion && room.now < S.room?.now) return;
+  const previous = S.room?.id === room.id ? S.room : null;
   S.lastVersion = room.version;
   S.room = room;
   if (!room.members.some(m => m.id === S.memberId)) { clearSeat(S.roomId); close(); return renderMissing('이 방에서 내보내졌거나 자리가 없어졌습니다.'); }
+  if (previous) {
+    const last = previous.chat?.at(-1)?.seq ?? 0;
+    const newest = room.chat?.findLast(m => m.seq > last && m.pid !== S.memberId);
+    if (newest) toast(`채팅 · ${newest.name}: ${newest.message}`, 'chat', 4800);
+  }
   render();
 }
 
@@ -413,6 +421,9 @@ function renderLobby() {
   const allReady = others.every(m => m.ready);
   const startReason = r.members.length < meta.min ? `${meta.min}명 이상 모이면 시작할 수 있어요.` : !allReady ? '모든 참가자가 준비해야 시작할 수 있어요.' : null;
   const keepScroll = window.scrollY;
+  if (S.lobbyChat?.id !== r.id) S.lobbyChat = { id: r.id, ...roomChat(send) };
+  const chat = S.lobbyChat;
+  const hadFocus = document.activeElement === chat.input;
   const showRecovery = () => modal(h('div', h('h3', '내 복구 코드'), h('p.small', '다른 컴퓨터나 브라우저에서 이 코드를 넣으면 같은 자리로 들어옵니다. 다른 사람에게 보여 주지 마세요.'), h('code.code', recoveryCode()), h('button', { onclick: () => copyText(recoveryCode()) }, '복사')));
   const invite = r.code
     ? h('div.code-panel',
@@ -448,8 +459,11 @@ function renderLobby() {
         r.gameType === 'harbor'
           ? harborSettingsEditor(r.settings, isHost, (s) => send('settings', { settings: s }))
           : settingsEditor(r.settings, isHost, (s) => send('settings', { settings: s }), Math.max(2, r.members.length))),
+      h('section.card.lobby-chat', h('h2', '방 채팅'), chat.node),
     ),
   ));
+  chat.update(r.chat || []);
+  if (hadFocus) chat.input.focus({ preventScroll: true });
   window.scrollTo(0, keepScroll);
 }
 

@@ -1,7 +1,7 @@
 // 「항구의 길」 규칙 엔진. 시간·Math.random 을 쓰지 않는 결정적 상태 머신.
 // 모든 무작위는 g.rng 로만 진행하므로 같은 시드 + 같은 행동 순서 = 같은 결과. 서버와 브라우저가 함께 사용한다.
-import { ECONOMY, TILES, BOARD_SIZE, PORT_IDS, REGION_PORTS, CARGO, CONTRACT_RANGES, contractReward, EVENTS, SHIPS, normalizeHarborSettings, boardSizeOf, levelLimit, tilesOf } from './data.js';
-import { randInt, pick, weightedPick, shuffle } from '../rng.js';
+import { ECONOMY, TILES, BOARD_SIZE, PORT_IDS, REGION_PORTS, CARGO, CONTRACT_RANGES, contractReward, EVENTS, SHIPS, ITEMS, DICE_POWER, PLAYER_LIMITS, WAGERS, normalizeHarborSettings, boardSizeOf, levelLimit, tilesOf } from './data.js';
+import { randInt, pick, weightedPick } from '../rng.js';
 
 export const SCHEMA_VERSION = 1;
 export class GameError extends Error {}
@@ -15,21 +15,23 @@ export function restoreGame(g) {
 
 export function createGame(members, settingsIn, seed) {
   const settings = normalizeHarborSettings(settingsIn);
-  if (members.length < 2 || members.length > SHIPS.length) fail('항구의 길은 2~4명이 함께합니다.');
+  if (members.length < PLAYER_LIMITS.min || members.length > PLAYER_LIMITS.max) fail(`항구의 길은 ${PLAYER_LIMITS.min}~${PLAYER_LIMITS.max}명이 함께합니다.`);
   const rng = { s: seed >>> 0, n: 0 };
   const players = members.map((m, i) => ({
     id: m.id, name: m.name, ship: i, color: SHIPS[i].color,
     cash: ECONOMY.startCash, pos: 0, cargo: null, bankrupt: false, bankruptRound: 0, turns: 0,
-    stats: { delivered: 0, deliveryIncome: 0, tollPaid: 0, tollEarned: 0, supply: 0 },
+    items: {},
+    stats: { delivered: 0, deliveryIncome: 0, tollPaid: 0, tollEarned: 0, supply: 0, laps: 0 },
   }));
   const g = {
     schema: SCHEMA_VERSION, game: 'harbor', boardSize: BOARD_SIZE, seed: seed >>> 0, rng, settings, players,
     doubles: 0, fund: 0,
-    owners: {}, order: shuffle(rng, players.map(p => p.id)), turnIdx: 0, round: 1, phase: 'play',
+    owners: {}, order: players.map(p => p.id), turnIdx: 0, round: 1, phase: 'play',
     pending: null, pendingSeq: 0, log: [], logSeq: 0, lastRoll: null, results: null,
+    orderDraw: { groups: [players.map(p => p.id)], rolls: {} },
   };
-  log(g, null, `출항! 차례 순서: ${g.order.map(id => P(g, id).name).join(' → ')}. 모두 ${ECONOMY.startCash}씩 들고 시작합니다.`, 'system');
-  setPending(g, { kind: 'roll', pid: g.order[0] });
+  log(g, null, '주사위 한 개로 출항 순서를 정합니다. 동점인 선장만 다시 굴립니다.', 'system');
+  setPending(g, { kind: 'order', pid: g.order[0] });
   return g;
 }
 
@@ -59,7 +61,7 @@ export function awaiting(g) {
 export function defaultActionFor(g, pid) {
   const pd = g.pending;
   if (!pd || pd.pid !== pid || g.phase === 'over') return null;
-  if (pd.kind === 'roll') return { type: 'roll' };
+  if (pd.kind === 'order' || pd.kind === 'roll') return { type: 'roll' };
   if (pd.kind === 'shelter') return { type: 'roll' };
   if (pd.kind === 'settle') {
     const cheapest = portsOf(g, pid).sort((a, b) => buybackOf(g, a) - buybackOf(g, b))[0];
@@ -77,9 +79,29 @@ export function act(g, pid, a) {
   const tiles = tilesOf(g);
   const type = a?.type;
   switch (pd.kind) {
+    case 'order':
+      if (type !== 'roll') fail('순서를 정할 주사위를 굴려 주세요.');
+      return rollOrder(g, p);
+    case 'bet': {
+      if (type === 'pass') return endTurn(g);
+      if (type !== 'bet' || !WAGERS.includes(a.amount) || p.cash < a.amount || !['odd', 'even'].includes(a.choice)) fail('베팅 금액과 홀짝 선택을 확인하세요.');
+      const face = randInt(g.rng, 1, 6);
+      const success = (face % 2 === 1) === (a.choice === 'odd');
+      const change = success ? a.amount : -a.amount;
+      p.cash += change;
+      log(g, pid, `${p.name}: 홀짝 승부 · 주사위 ${face}(${face % 2 ? '홀' : '짝'}) · ${success ? '적중 +' : '실패 −'}${a.amount} · 현금 ${p.cash}`, 'bet', [[pid, change]]);
+      return endTurn(g);
+    }
     case 'roll': {
+      if (type === 'useSupply') {
+        if (!consumeItem(p, 'supply')) fail('사용할 보급 상자가 없습니다.');
+        p.cash += ECONOMY.supply;
+        log(g, pid, `${p.name}: 보급 상자 사용 · 현금 +${ECONOMY.supply}`, 'card', [[pid, ECONOMY.supply]]);
+        return setPending(g, { kind: 'roll', pid });
+      }
       if (type !== 'roll') fail('주사위를 굴려 주세요.');
-      const { value, double } = rollDice(g, p);
+      if (a.power && (!g.settings.theme || !Object.hasOwn(DICE_POWER, a.power))) fail('주사위 강도를 확인하세요.');
+      const { value, double } = rollDice(g, p, a.power);
       g.doubles = double ? (g.doubles || 0) + 1 : 0;
       if (g.doubles === 3) {
         p.pos = TILES.find(t => t.type === 'shelter').i;
@@ -119,10 +141,14 @@ export function act(g, pid, a) {
       const o = g.owners[pd.tile];
       if (type !== 'takeover' || !o || o.pid === pid || o.level >= ECONOMY.maxLevel || p.cash < pd.cost) fail('이 항구를 인수할 수 없습니다.');
       const seller = P(g, o.pid);
+      if (consumeItem(seller, 'deed')) {
+        log(g, seller.id, `${seller.name}: 인수 방어권으로 ${tiles[pd.tile].name} 인수를 막았습니다 · 인수 대금 미지급`, 'defense');
+        return endTurn(g);
+      }
       p.cash -= pd.cost;
       seller.cash += pd.cost;
       o.pid = pid;
-      log(g, pid, `${p.name}: ${TILES[pd.tile].name} 인수 (${pd.cost} → ${seller.name})`, 'buy', [[pid, -pd.cost], [seller.id, pd.cost]]);
+      log(g, pid, `${p.name}: ${tiles[pd.tile].name} 인수 (${pd.cost} → ${seller.name})`, 'buy', [[pid, -pd.cost], [seller.id, pd.cost]]);
       return endTurn(g);
     }
     case 'buy': {
@@ -177,11 +203,39 @@ export function act(g, pid, a) {
   fail('알 수 없는 행동입니다.');
 }
 
+function rollOrder(g, p) {
+  const { groups, rolls } = g.orderDraw;
+  const index = groups.findIndex(group => group.length > 1);
+  const group = groups[index];
+  const value = randInt(g.rng, 1, 6);
+  rolls[p.id] = value;
+  p.orderFace = value;
+  g.lastRoll = { seq: (g.lastRoll?.seq || 0) + 1, pid: p.id, value, dice: [value] };
+  log(g, p.id, `${p.name}: 순서 주사위 ${value}`, 'roll');
+  const next = group.find(id => !rolls[id]);
+  if (next) return setPending(g, { kind: 'order', pid: next });
+  const byFace = Array.from({ length: 6 }, (_, i) => group.filter(id => rolls[id] === 6 - i)).filter(ids => ids.length);
+  groups.splice(index, 1, ...byFace);
+  const tie = groups.find(ids => ids.length > 1);
+  if (tie) {
+    g.orderDraw.rolls = {};
+    log(g, null, `동점 다시 굴리기 · ${tie.map(id => P(g, id).name).join(', ')}`, 'system');
+    return setPending(g, { kind: 'order', pid: tie[0] });
+  }
+  g.order = groups.flat();
+  g.orderDraw = null;
+  log(g, null, `출항 순서 · ${g.order.map(id => P(g, id).name).join(' → ')}`, 'system');
+  setPending(g, { kind: 'roll', pid: g.order[0] });
+}
+
 // ---------- 이동과 도착 ----------
-function rollDice(g, p) {
-  const dice = [randInt(g.rng, 1, 6)];
-  if (g.boardSize) dice.push(randInt(g.rng, 1, 6));
-  const value = dice.reduce((sum, face) => sum + face, 0);
+function rollDice(g, p, power) {
+  const faces = () => Array.from({ length: g.boardSize ? 2 : 1 }, () => randInt(g.rng, 1, 6));
+  const total = dice => dice.reduce((sum, face) => sum + face, 0);
+  let dice = faces();
+  const target = DICE_POWER[power];
+  if (target && (total(dice) < target.min || total(dice) > target.max)) dice = faces();
+  const value = total(dice);
   const double = dice[0] === dice[1];
   g.lastRoll = { seq: (g.lastRoll?.seq || 0) + 1, pid: p.id, value, dice };
   p.turns++;
@@ -189,10 +243,16 @@ function rollDice(g, p) {
   return { value, double };
 }
 
+function consumeItem(p, id) {
+  if (!p.items?.[id]) return false;
+  p.items[id]--;
+  return true;
+}
+
 function shelter(g, p) {
   p.sheltered = 2;
   g.doubles = 0;
-  log(g, p.id, `${p.name}: 폭풍 피난소로 들어갑니다 · 최대 2차례 대기`, 'event');
+  log(g, p.id, `${p.name}: ${tilesOf(g)[p.pos].name} 입장 · 최대 2차례 대기`, 'event');
   return endTurn(g);
 }
 
@@ -204,7 +264,8 @@ function move(g, p, steps, express = false) {
       passedStart = true;
       p.cash += ECONOMY.supply;
       p.stats.supply += ECONOMY.supply;
-      log(g, p.id, `${p.name}: 출항지 보급금 +${ECONOMY.supply}`, 'supply', [[p.id, ECONOMY.supply]]);
+      p.stats.laps = (p.stats.laps || 0) + 1;
+      log(g, p.id, `${p.name}: ${p.stats.laps}바퀴 완료 · 보급금 +${ECONOMY.supply}`, 'supply', [[p.id, ECONOMY.supply]]);
     }
     if (p.cargo && p.cargo.dest === p.pos && (!express || s === steps - 1)) deliver(g, p);
   }
@@ -223,6 +284,10 @@ function land(g, p, fromEvent = false) {
   const t = tilesOf(g)[p.pos];
   if (t.type === 'start') { log(g, p.id, `${p.name}: 출항지에 정박`, 'info'); return endTurn(g); }
   if (t.type === 'shelter') return shelter(g, p);
+  if (t.type === 'bet') {
+    if (p.cash >= WAGERS[0]) return setPending(g, { kind: 'bet', pid: p.id, tile: t.i });
+    return endTurn(g);
+  }
   if (t.type === 'charter') {
     if (p.cash >= ECONOMY.charterFee) return setPending(g, { kind: 'charter', pid: p.id, tile: t.i });
     return endTurn(g);
@@ -251,6 +316,10 @@ function land(g, p, fromEvent = false) {
       return endTurn(g);
     }
     const fee = tollOf(g, t.i);
+    if (consumeItem(p, 'toll')) {
+      log(g, p.id, `${p.name}: 통행권으로 ${t.name} 이용료 ${fee} 면제`, 'defense');
+      return afterPayment(g, p, t.i);
+    }
     if (charge(g, p, fee, o.pid, `${t.name} 이용료`, false, t.i)) afterPayment(g, p, t.i);
     return;
   }
@@ -259,8 +328,36 @@ function land(g, p, fromEvent = false) {
     return setPending(g, { kind: 'market', pid: p.id, tile: t.i, contracts: makeContracts(g, t.i) });
   }
   if (t.type === 'event') {
+    if (g.settings.theme && !fromEvent) return drawCard(g, p);
     const e = fromEvent ? EVENTS.find(x => x.id === 'calm') : weightedPick(g.rng, EVENTS, x => x.weight);
     return applyEvent(g, p, e);
+  }
+}
+
+function drawCard(g, p) {
+  const item = randInt(g.rng, 1, 2) === 1 ? pick(g.rng, Object.keys(ITEMS)) : null;
+  const event = item ? null : weightedPick(g.rng, EVENTS, x => x.weight);
+  const card = item ? ITEMS[item] : event;
+  g.lastCard = { seq: (g.lastCard?.seq || 0) + 1, name: card.name, icon: card.icon || '✦',
+    text: item ? card.effect : cardEventEffect(g, p, event), player: p.name };
+  if (event) return applyEvent(g, p, event);
+  p.items ||= {};
+  p.items[item] = (p.items[item] || 0) + 1;
+  log(g, p.id, `${p.name}: 황금 카드에서 ${card.name} 획득`, 'card');
+  return endTurn(g);
+}
+
+function cardEventEffect(g, p, event) {
+  const n = event.amount;
+  switch (event.kind) {
+    case 'gain': return `뽑은 선장 현금 +${n}`;
+    case 'pay': return `뽑은 선장 현금 −${n}`;
+    case 'all': return `생존한 선장마다 현금 +${n}`;
+    case 'cargoFee': return p.cargo ? `화물 검사비 −${n}` : '화물이 없어 검사비가 없습니다.';
+    case 'perPort': return `보유 항구 ${portsOf(g, p.id).length}곳 경비 −${portsOf(g, p.id).length * n}`;
+    case 'underdog': return `항구 수가 가장 적은 선장마다 현금 +${n}`;
+    case 'cargoBonus': return p.cargo ? `운송 중인 화물의 보상 +${n}` : '운송 중인 화물이 없어 보상이 바뀌지 않습니다.';
+    default: return event.text;
   }
 }
 

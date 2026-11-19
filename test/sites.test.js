@@ -120,6 +120,10 @@ test('Sites: 「항구의 길」 한 판 — 중복 요청은 한 번만, 결과
   const h = (await req(d1, '/api/rooms', { gameType: 'harbor', name: '민지', password: 'sea1', settings: { rounds: 6 } })).body;
   assert.equal((await req(d1, `/api/rooms/${h.roomId}/join`, { name: '준호' })).body.reason, 'password');
   const g = (await req(d1, `/api/rooms/${h.roomId}/join`, { name: '준호', password: 'sea1' })).body;
+  const chat = await req(d1, `/api/rooms/${h.roomId}/act`, { type: 'chat', message: '출발 준비됐어요', actionId: 'lobby-chat' }, g.token);
+  assert.equal(chat.status, 200);
+  const lobby = (await req(d1, `/api/rooms/${h.roomId}/state`, null, h.token)).body;
+  assert.equal(lobby.chat.at(-1).message, '출발 준비됐어요');
   await req(d1, `/api/rooms/${h.roomId}/act`, { type: 'ready', ready: true, actionId: 'r' }, g.token);
   assert.equal((await req(d1, `/api/rooms/${h.roomId}/act`, { type: 'start', actionId: 's' }, h.token)).status, 200);
   const tok = (pid) => (pid === h.memberId ? h.token : g.token);

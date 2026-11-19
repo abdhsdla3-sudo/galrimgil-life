@@ -1,15 +1,22 @@
 // 「항구의 길」 게임 화면. 서버가 보낸 상태를 그리고, 내 차례의 선택만 서버로 보낸다.
-import { h, modal, copyText } from './util.js';
-import { PORT_IDS, REGIONS, REGION_PORTS, ECONOMY, SHIPS, DEFAULT_ACTION_TEXT, BOARD_SIZE, boardSizeOf, levelLimit, tilesOf, regionNameOf } from '/game/harbor/data.js';
+import { h, modal, copyText, roomChat } from './util.js';
+import { PORT_IDS, REGIONS, REGION_PORTS, ECONOMY, SHIPS, ITEMS, THEMES, DICE_POWER, WAGERS, DEFAULT_ACTION_TEXT, BOARD_SIZE, boardSizeOf, levelLimit, tilesOf, regionNameOf } from '/game/harbor/data.js';
 import { portsOf, buybackOf, tollOf, worthOf, liquidValue, ownedRegions } from '/game/harbor/engine.js';
 import { artSlot, loadManifest } from './games.js';
 import { sfx } from './audio.js';
 
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const TYPE_LABEL = { start: '출항지', port: '항구', market: '화물 시장', event: '해상 이벤트', shelter: '폭풍 피난소', charter: '쾌속선', tax: '항로 관리비', fund: '선원 조합' };
-const TYPE_ICON = { start: '⚓', market: '📦', event: '🌊', shelter: '⛈', charter: '⛴', tax: '🧾', fund: '💰' };
+const TYPE_LABEL = { start: '출항지', port: '항구', market: '화물 시장', event: '이벤트', shelter: '구금·대기', charter: '여행', tax: '항로 관리비', fund: '선원 조합', bet: '홀짝 승부' };
+const TYPE_ICON = { start: '⚓', market: '📦', event: '✦', shelter: '🔒', charter: '🧭', tax: '🧾', fund: '💰', bet: '🎲' };
 const LEVEL_NAME = ['부두', '창고', '대형 항만', '해상 기지'];
+const DICE_FACE = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+const DECISIONS = {
+  buy: ['⚑', '도시 매입'], upgrade: ['▥', '시설 확장'], takeover: ['⇄', '도시 인수'],
+  market: ['📦', '화물 계약'], shelter: ['🔒', '구금소 탈출'], charter: ['🧭', '여행 목적지'], settle: ['₩', '비용 정산'], bet: ['🎲', '홀짝 승부'],
+};
 const money = n => n.toLocaleString('ko-KR');
+const effectGrid = entries => h('dl.hdecision-effects', ...entries.map(([name, value]) =>
+  h('div', h('dt', name), h('dd', value))));
 
 // 칸 번호 → 격자 위치 (왼쪽 위에서 시계 방향)
 export function tileCell(i, size = BOARD_SIZE) {
@@ -31,11 +38,16 @@ const SHIP_PATHS = [
   '<path d="M14 10 H30 V38 H10Z"/><path d="M34 6 H52 L56 38 H34Z" opacity=".8"/><path d="M4 42 Q32 38 60 42 L54 56 H10Z"/>',
   // 예인선: 높은 조타실과 범퍼
   '<rect x="24" y="14" width="18" height="14" rx="3"/><rect x="14" y="28" width="38" height="10" rx="3"/><path d="M4 40 H60 V46 Q60 56 48 56 H16 Q4 56 4 46Z"/><circle cx="10" cy="48" r="4" fill="#13294b"/>',
+  '<path d="M30 5 V35 H10Z M34 12 L53 35 H34Z M4 41 H60 L54 51 H37 L33 46 H31 L27 51 H11Z"/>',
+  '<path d="M6 39 H58 L51 54 H13Z M14 26 H53 V39 H14Z M19 15 H44 V26 H19Z"/><path fill="none" d="M19 32 H48 M26 20 H39"/>',
+  '<path d="M5 42 H61 L55 53 H11Z M10 29 H25 V42 H10Z M27 29 H42 V42 H27Z M27 16 H42 V29 H27Z M44 23 H55 V42 H44Z"/>',
+  '<ellipse cx="32" cy="42" rx="29" ry="12"/><path d="M23 35 L26 23 H39 L42 35 M31 23 V12 H42 V16 H35 V23"/>',
 ];
 export function shipIcon(idx, color, { size = 28, title } = {}) {
   const box = h('span.ship', { style: { '--ship': color, width: size + 'px', height: size + 'px' }, role: title ? 'img' : undefined, 'aria-label': title, 'aria-hidden': title ? undefined : 'true' });
-  box.innerHTML = `<svg viewBox="0 0 64 64" fill="${color}" stroke="#0b1730" stroke-width="2.5" stroke-linejoin="round">${SHIP_PATHS[idx % 4]}</svg>`;
-  const src = `/assets/harbor/ship-${(idx % 4) + 1}.png`;
+  box.innerHTML = `<svg viewBox="0 0 64 64" fill="${color}" stroke="#0b1730" stroke-width="2.5" stroke-linejoin="round">${SHIP_PATHS[idx]}</svg>`;
+  if (idx >= 4) return box;
+  const src = `/assets/harbor/ship-${idx + 1}.png`;
   loadManifest().then(set => {
     if (!set.has(src)) return;
     const img = h('img', { src, alt: '' });
@@ -53,7 +65,8 @@ export class HarborScreen {
   }
   destroy() {
     this.destroyed = true;
-    clearInterval(this.timer); clearTimeout(this.stepTimer);
+    clearInterval(this.timer); clearTimeout(this.stepTimer); clearTimeout(this.highlightTimer);
+    this.chatDialog?.close();
     document.querySelectorAll('.modal-back').forEach(m => m.remove());
   }
   get me() { return this.d.S.memberId; }
@@ -64,15 +77,34 @@ export class HarborScreen {
     this.hero = artSlot('/assets/harbor/hero-port.png', 'port', { cls: 'hero-art' });
     this.center = h('div.hcenter');
     this.board = h('div.hboard', { role: 'group' }, this.center);
+    this.boardView = h('div.hboard-view', { tabindex: 0, 'aria-label': '확대 보드. 스크롤해서 이동합니다.' }, this.board);
+    this.overview = h('button.small', { type: 'button', 'aria-pressed': 'false', onclick: () => {
+      const small = this.boardView.classList.toggle('overview');
+      this.overview.setAttribute('aria-pressed', String(small));
+      this.overview.textContent = small ? '보드 확대' : '전체 보기';
+      if (!small) this.followPawn();
+    } }, '전체 보기');
+    this.feedback = h('div.hfeedback', { role: 'status', hidden: true });
+    this.cardReveal = h('div.hcard-reveal', { role: 'status', hidden: true });
+    this.diceStrip = h('div.hdice-strip', { 'aria-live': 'polite' });
+    this.chat = roomChat(this.d.send);
     this.players = h('section.hplayers', { 'aria-label': '참가자와 잔액' });
     this.detail = h('section.hdetail', { 'aria-live': 'polite' });
-    this.action = h('section.haction', { 'aria-live': 'polite' });
+    this.action = h('section.haction', { 'aria-live': 'polite', 'aria-label': '현재 행동',
+      onkeydown: e => {
+        if (e.key !== 'Escape' || !this.decisionOpen) return;
+        this.decisionOpen = false;
+        this.renderAction();
+        this.action.querySelector('button')?.focus({ preventScroll: true });
+      } });
     this.logBox = h('details.hlog', h('summary', '최근 거래'), this.logList = h('ol.hlog-list'));
     this.rules = h('details.hrules', h('summary', '규칙 보기'));
     this.root.replaceChildren(h('div.harbor',
       this.top,
       h('div.hbody',
-        h('div.hmain', this.board),
+        h('div.hmain', h('div.hboard-tools',
+          h('button.small', { onclick: () => this.followPawn() }, '현재 칸 보기'), this.overview),
+          this.diceStrip, this.feedback, this.cardReveal, this.boardView),
         this.players,
         this.detail,
         h('div.hextra', this.logBox, this.rules),
@@ -102,11 +134,15 @@ export class HarborScreen {
     const roll = g.lastRoll && g.lastRoll.seq !== this.lastRollSeq ? g.lastRoll : null;
     const firstLoad = !prev;
     if (roll) { this.lastRollSeq = roll.seq; if (!firstLoad) this.showDice(roll); }
+    if (roll) this.renderDice(roll);
     if (firstLoad) for (const p of g.players) this.disp[p.id] = p.pos;
     // 내 차례 알림
     const myTurnNow = pd?.pid === this.me && pd.kind === 'roll';
     if (!firstLoad && myTurnNow && this.lastPending?.pid !== this.me) { sfx('turn'); if (document.hidden) document.title = '🔔 내 차례! — 항구의 길'; }
-    if (pd?.id !== this.lastPending?.id) this.busy = false;
+    if (pd?.id !== this.lastPending?.id) {
+      this.busy = false;
+      this.decisionOpen = Boolean(pd?.pid === this.me && DECISIONS[pd.kind]);
+    }
     this.lastPending = pd;
     // 금액 변화 표시
     const before = this.prevCash;
@@ -121,7 +157,10 @@ export class HarborScreen {
     if (pd?.pid === this.me && pd.id === prev?.pending?.id) this.renderTimer();
     else this.renderAction();
     this.renderLog();
+    this.chat.update(room.chat || []);
+    this.showFeedback(prev, g);
     this.animateMoves(firstLoad);
+    if (firstLoad || prev.pending?.pid !== pd?.pid) this.followPawn();
     if (g.phase === 'over' && !this.resultsShown) { this.resultsShown = true; if (!firstLoad) sfx('fanfare'); }
   }
 
@@ -129,12 +168,51 @@ export class HarborScreen {
   renderTop() {
     const g = this.g, r = this.room;
     put(this.top,
-      h('div.hbrand', h('b', '항구의 길'), r.code ? h('span.hcode', '방 ', h('span.mono', r.code)) : null),
-      h('div.hround', g.phase === 'over' ? '항해 종료' : `${g.round} / ${g.settings.rounds} 라운드`),
+      h('div.hbrand', h('b', '항구의 길'), g.settings.theme ? h('span.hcode', THEMES[g.settings.theme]) : null, r.code ? h('span.hcode', '방 ', h('span.mono', r.code)) : null),
+      h('div.hround', g.phase === 'over' ? '항해 종료' : g.orderDraw ? '순서 정하기' : `${g.round} / ${g.settings.rounds} 라운드`),
       h('div.hmenu',
         h('button.small', { onclick: () => this.routeModal() }, '항로 목록'),
+        h('button.small', { onclick: () => this.itemsModal() }, '내 카드'),
+        h('button.small', { onclick: () => {
+          this.chatDialog = modal(h('div', h('h3', '방 채팅'), this.chat.node), { onClose: () => { this.chatDialog = null; } });
+          this.chat.input.focus();
+        } }, '채팅'),
         h('button.small', { onclick: () => this.recoveryModal() }, '복구 코드'),
         h('button.small', { onclick: () => this.d.leaveToHome() }, '게임 선택으로')));
+  }
+  itemsModal() {
+    const items = this.P(this.me)?.items || {};
+    modal(h('div', h('h3', '내 카드'), ...Object.entries(ITEMS).map(([id, item]) =>
+      h('div.asset-item', h('b', `${item.icon} ${item.name} · ${items[id] || 0}장`), h('p', item.effect)))));
+  }
+
+  followPawn() {
+    if (this.boardView.classList.contains('overview')) return;
+    const p = this.P(this.g.pending?.pid || this.me);
+    const cell = this.tiles[p ? this.disp[p.id] ?? p.pos : 0];
+    if (!cell) return;
+    const a = cell.getBoundingClientRect(), b = this.boardView.getBoundingClientRect();
+    this.boardView.scrollTo({ left: this.boardView.scrollLeft + a.left - b.left - (b.width - a.width) / 2,
+      top: this.boardView.scrollTop + a.top - b.top - (b.height - a.height) / 2 });
+  }
+
+  showFeedback(prev, g) {
+    if (!prev) return;
+    const latest = g.log.filter(l => l.seq > prev.logSeq && ['buy', 'upgrade', 'supply', 'defense', 'toll', 'deliver', 'bet'].includes(l.kind));
+    if (latest.length) {
+      const icons = { buy: '⚑', upgrade: '▥', supply: '⛳', defense: '🛡', toll: '₩', deliver: '📦', bet: '🎲' };
+      put(this.feedback, ...latest.map(l => h('div', h('span', icons[l.kind]), h('strong', l.text))));
+      this.feedback.hidden = false;
+      clearTimeout(this.highlightTimer);
+      this.highlightTimer = setTimeout(() => { this.feedback.hidden = true; }, 5200);
+    }
+    const c = g.lastCard;
+    if (c && c.seq !== prev.lastCard?.seq) {
+      put(this.cardReveal, h('span.card-wheel', { 'aria-hidden': 'true' }, '✦'),
+        h('div.card-prize', h('b', `${c.icon} ${c.name}`), h('span', `${c.player} · ${c.text}`)),
+        h('button.small', { 'aria-label': '카드 결과 닫기', onclick: () => { this.cardReveal.hidden = true; } }, '닫기'));
+      this.cardReveal.hidden = false;
+    }
   }
   recoveryModal() {
     const code = this.d.recoveryCode();
@@ -155,7 +233,7 @@ export class HarborScreen {
         shipIcon(p.ship, p.color, { size: 30, title: SHIPS[p.ship].name }),
         h('div.hp-main',
           h('div.hp-name', h('b', p.name), p.id === this.me ? h('span.tag', '나') : null, m && !m.online ? h('span.tag.off', '연결 끊김') : null, p.id === cur ? h('span.tag.now', '차례') : null),
-          h('div.hp-sub', p.bankrupt ? '파산' : `항구 ${ports}곳 · 순자산 ${money(worthOf(g, p))}`)),
+          h('div.hp-sub', g.orderDraw ? (p.orderFace ? `순서 주사위 ${p.orderFace}` : '굴리기 대기') : p.bankrupt ? '파산' : `항구 ${ports}곳 · 순자산 ${money(worthOf(g, p))} · ${p.stats.laps || 0}바퀴`)),
         h('button.hp-cash', { onclick: () => this.assetsModal(p.id), 'aria-label': `${p.name} 자산 상세` },
           h('span.cash-label', '현금'), money(p.cash), d ? h('span.delta' + (d > 0 ? '.up' : '.down'), (d > 0 ? '+' : '') + d) : null));
     })));
@@ -197,6 +275,12 @@ export class HarborScreen {
       const owner = o ? this.P(o.pid) : null;
       const isDest = me?.cargo?.dest === t.i;
       const pawns = g.players.filter(p => !p.bankrupt && this.disp[p.id] === t.i);
+      const marker = owner ? `${owner.id}:${o.level}` : '';
+      if (el.dataset.owner !== undefined && marker && el.dataset.owner !== marker) {
+        el.classList.remove('claim');
+        requestAnimationFrame(() => el.classList.add('claim'));
+      }
+      el.dataset.owner = marker;
       el.classList.toggle('dest', isDest);
       el.classList.toggle('here', !!cur && this.disp[cur.id] === t.i);
       el.classList.toggle('owned', !!owner);
@@ -208,10 +292,11 @@ export class HarborScreen {
         h('span.ht-band'),
         h('span.ht-name', TYPE_ICON[t.type] ? h('span.ht-icon', TYPE_ICON[t.type]) : null, t.short),
         t.type === 'port'
-          ? (owner ? h('span.ht-own', h('span.ht-toll', String(tollOf(g, t.i)))) : h('span.ht-price', String(t.price)))
+          ? (owner ? h('span.ht-own', h('span.ht-flag', `⚑ ${owner.name}`), h('span.ht-toll', `이용료 ${tollOf(g, t.i)}`)) : h('span.ht-price', String(t.price)))
           : null,
         isDest ? h('span.ht-dest', { title: '내 배송 목적지' }, '📦') : null,
-        h('span.ht-pawns', ...pawns.map(p => shipIcon(p.ship, p.color, { size: 22 }))));
+        pawns.length > 4 ? h('span.ht-crowd', `정박 ${pawns.length}`) :
+          h('span.ht-pawns', ...pawns.map(p => shipIcon(p.ship, p.color, { size: 22 }))));
     }
   }
   tileLabel(i) {
@@ -239,9 +324,10 @@ export class HarborScreen {
         moving = true;
       }
       this.renderTiles();
-      if (moving) this.stepTimer = setTimeout(step, 150); else { this.renderCenter(); this.renderDetail(); }
+      if (moving) this.stepTimer = setTimeout(step, 95); else { this.renderCenter(); this.renderDetail(); if (this.didMove) this.followPawn(); this.didMove = false; }
     };
     if (firstLoad) { for (const p of g.players) this.disp[p.id] = p.pos; return; }
+    this.didMove ||= g.players.some(p => this.disp[p.id] !== p.pos);
     this.stepTimer = setTimeout(step, this.diceShowing ? 450 : 0);
   }
   showDice(roll) {
@@ -251,19 +337,23 @@ export class HarborScreen {
     setTimeout(() => { this.diceShowing = false; }, 450);
   }
 
+  renderDice(roll) {
+    const faces = roll.dice || [roll.value];
+    put(this.diceStrip, h('div.hc-dice' + (this.diceShowing ? '.rolling' : ''),
+      ...faces.map(face => h('span.die', { 'aria-label': String(face) }, DICE_FACE[face - 1])),
+      h('div', h('b', `${roll.value}칸${faces.length === 2 && faces[0] === faces[1] ? ' · 더블' : ''}`),
+        h('span.small', ` · ${this.P(roll.pid)?.name || ''}`))));
+  }
+
   // ---------- 가운데 안내 ----------
   renderCenter() {
     const g = this.g;
     if (g.phase === 'over') return put(this.center, this.resultsView());
     const pd = g.pending, cur = this.P(pd.pid);
-    const roll = g.lastRoll;
     const lines = g.log.filter(l => l.kind !== 'roll' && l.kind !== 'round').slice(-2);
     put(this.center,
       this.hero,
       h('div.hc-turn', { style: { '--pc': cur.color } }, shipIcon(cur.ship, cur.color, { size: 34 }), h('b', pd.pid === this.me ? '내 차례' : `${cur.name}의 차례`)),
-      roll ? h('div.hc-dice' + (this.diceShowing ? '.rolling' : ''), { 'aria-label': `최근 주사위 ${(roll.dice || [roll.value]).join(' + ')}, 합계 ${roll.value}` },
-        ...(roll.dice || [roll.value]).map(face => h('span.die', String(face))),
-        roll.dice?.length === 2 ? h('b', `합계 ${roll.value}${roll.dice[0] === roll.dice[1] ? ' · 더블' : ''}`) : null) : null,
       h('div.hc-lines', ...lines.map(l => h('p.hc-line.k-' + l.kind, l.text))));
   }
 
@@ -275,9 +365,11 @@ export class HarborScreen {
     const p = this.P(pid);
     const i = this.disp[pid] ?? p.pos;
     const me = this.P(this.me);
+    const here = g.players.filter(x => !x.bankrupt && this.disp[x.id] === i);
     put(this.detail,
       h('h2', '현재 칸'),
       this.tileInfo(i, { compact: true }),
+      here.length > 1 ? h('div.hdocked', ...here.map(x => h('span', shipIcon(x.ship, x.color, { size: 32 }), x.name))) : null,
       me && !me.bankrupt ? h('p.small.mycargo', me.cargo ? `내 화물: ${me.cargo.cargoName} → ${me.cargo.destName} · 보상 ${me.cargo.reward} (지나가거나 도착하면 자동 배송)` : '내 화물: 없음 (화물 시장에서 계약)') : null);
   }
   tileInfo(i, { compact = false } = {}) {
@@ -290,7 +382,8 @@ export class HarborScreen {
         shelter: `최대 2차례 대기. 더블이 나오거나 ${ECONOMY.shelterFee}를 내면 먼저 출항합니다.`,
         charter: `${ECONOMY.charterFee}를 내면 원하는 항구로 이동합니다.`,
         tax: `관리비 ${ECONOMY.harborTax}를 내면 선원 조합 기금에 쌓입니다.`,
-        fund: `정박한 선장이 쌓인 기금을 받습니다. 현재 ${g.fund}.` }[t.type];
+        fund: `정박한 선장이 쌓인 기금을 받습니다. 현재 ${g.fund}.`,
+        bet: '게임 크레딧 50·100·200 중 하나로 주사위 한 개의 홀짝을 맞힙니다. 확률은 양쪽 모두 50%입니다.' }[t.type];
       return h('div.tileinfo', head, h('p', desc));
     }
     return h('div.tileinfo', head,
@@ -309,6 +402,7 @@ export class HarborScreen {
   // ---------- 행동 ----------
   renderAction() {
     const g = this.g;
+    this.action.classList.remove('decision-open');
     if (g.phase === 'over') return put(this.action, h('div.hact-row', ...this.resultButtons()));
     const pd = g.pending, me = this.P(this.me);
     const mine = pd.pid === this.me;
@@ -325,37 +419,86 @@ export class HarborScreen {
       if (this.busy) return;
       this.busy = true;
       this.action.querySelectorAll('button').forEach(b => { b.disabled = true; });
-      this.d.send('game', { pendingId: pd.id, action }).then(r => { if (!r) { this.busy = false; this.renderAction(); } });
+      if (action.type === 'roll') {
+        const count = g.boardSize && pd.kind !== 'order' ? 2 : 1;
+        put(this.diceStrip, h('div.hc-dice.casting', { 'aria-label': '주사위를 굴리는 중' },
+          ...Array.from({ length: count }, () => h('span.die', '⚄')), h('b', '굴리는 중')));
+      }
+      this.d.send('game', { pendingId: pd.id, action }).then(r => {
+        if (!r) { this.busy = false; if (g.lastRoll) this.renderDice(g.lastRoll); else put(this.diceStrip); this.renderAction(); }
+      });
     };
     const t = pd.tile !== undefined ? this.tileData[pd.tile] : null;
     let body;
-    if (pd.kind === 'roll') {
-      body = [h('p.hprompt', '주사위를 굴려 항로를 나아가세요.'),
-        h('button.hbtn.primary', { onclick: () => send({ type: 'roll' }) }, h('span.main', g.boardSize ? '🎲 주사위 두 개 굴리기' : '🎲 주사위 굴리기'), h('span.sub', `출항지까지 ${(this.size - me.pos) % this.size || this.size}칸 · 보급금 ${ECONOMY.supply}`))];
+    if (pd.kind === 'order') {
+      body = [h('p.hprompt', '주사위 한 개로 순서를 정합니다. 높은 눈부터 출항하고 동점자만 다시 굴립니다.'),
+        h('button.hbtn.primary.hroll', { onclick: () => send({ type: 'roll' }) }, '🎲 순서 주사위')];
+    } else if (pd.kind === 'roll') {
+      let power;
+      const keys = Object.keys(DICE_POWER);
+      const odds = h('output.dice-odds', '일반 · 기본 확률');
+      body = [g.settings.theme ? h('label.dice-power', h('span', '주사위 강도'), odds, h('input', {
+        type: 'range', 'aria-label': '주사위 강도', min: 0, max: 3, value: 0, oninput: e => {
+          power = keys[Number(e.target.value) - 1];
+          const target = DICE_POWER[power];
+          odds.textContent = target ? `${target.name} · 합계 ${target.min}~${target.max} 확률 약 ${target.chance}%` : '일반 · 기본 확률';
+        },
+      })) : null,
+      h('button.hbtn.primary.hroll', { onclick: () => send({ type: 'roll', power }) }, h('span.main', '🎲 주사위'),
+        h('span.sub', `출발까지 ${(this.size - me.pos) % this.size || this.size}칸 · 보급금 +${ECONOMY.supply}`)),
+      me.items?.supply ? h('button.hbtn.alt', { onclick: () => send({ type: 'useSupply' }) }, `🧰 보급 상자 사용 · 현금 +${ECONOMY.supply}`) : null];
+    } else if (pd.kind === 'bet') {
+      const amount = h('select', { 'aria-label': '베팅 금액' }, ...WAGERS.filter(n => n <= me.cash).map(n => h('option', { value: n }, `${n} 크레딧`)));
+      const preview = h('div');
+      const update = () => {
+        const n = Number(amount.value);
+        put(preview, effectGrid([['맞히면 현금', money(me.cash + n)], ['틀리면 현금', money(me.cash - n)], ['적중 확률', '50%']]));
+      };
+      amount.addEventListener('change', update);
+      update();
+      const bet = choice => send({ type: 'bet', amount: Number(amount.value), choice });
+      body = [amount, preview, h('div.hbet-options',
+        h('button.hbtn.primary', { onclick: () => bet('odd') }, '⚀ 홀수에 걸기'),
+        h('button.hbtn.alt', { onclick: () => bet('even') }, '⚁ 짝수에 걸기')),
+        h('button.hbtn', { onclick: () => send({ type: 'pass' }) }, '베팅 없이 지나가기')];
     } else if (pd.kind === 'shelter') {
-      body = [h('p.hprompt', `폭풍 피난소 · 최대 ${me.sheltered}차례 대기`),
-        h('button.hbtn.primary', { onclick: () => send({ type: 'roll' }) }, '주사위 굴려 출항 시도'),
-        h('button.hbtn', { disabled: me.cash < ECONOMY.shelterFee, onclick: () => send({ type: 'release' }) }, `출항비 ${ECONOMY.shelterFee} 내기`)];
+      body = [h('p.hprompt', `최대 ${me.sheltered}차례 대기. 더블이 나오거나 마지막 대기 차례면 굴린 만큼 이동합니다.`),
+        h('button.hbtn.primary', { onclick: () => send({ type: 'roll' }) }, '🎲 주사위로 탈출 시도'),
+        h('button.hbtn', { disabled: me.cash < ECONOMY.shelterFee, onclick: () => send({ type: 'release' }) }, `비용 ${ECONOMY.shelterFee} 내고 즉시 탈출`, h('span.sub', `남는 현금 ${money(me.cash - ECONOMY.shelterFee)}`))];
     } else if (pd.kind === 'charter') {
       const dest = h('select', { 'aria-label': '이동할 항구' }, ...PORT_IDS.map(i => h('option', { value: i },
         `${this.tileData[i].name}${g.owners[i]?.pid !== this.me && g.owners[i] ? ` · 이용료 ${tollOf(g, i)}` : ''}`)));
-      body = [h('p.hprompt', '쾌속선으로 이동할 항구를 고르세요.'), dest,
-        h('button.hbtn.primary', { onclick: () => send({ type: 'sail', tile: Number(dest.value) }) }, `쾌속선 이용 · ${ECONOMY.charterFee}`),
+      const effect = h('p.hprompt');
+      const updateTravel = () => {
+        const i = Number(dest.value), o = g.owners[i];
+        const fee = o && o.pid !== me.id && !me.items?.toll ? tollOf(g, i) : 0;
+        const supply = i < me.pos ? ECONOMY.supply : 0;
+        const delivery = me.cargo?.dest === i ? me.cargo.reward : 0;
+        effect.textContent = `${this.tileData[i].name}으로 즉시 이동 · 승선료 −${ECONOMY.charterFee}${supply ? ` · 완주 보급금 +${supply}` : ''}${delivery ? ` · 배송 +${delivery}` : ''}${fee ? ` · 도착 이용료 −${fee}` : ''}`;
+      };
+      dest.addEventListener('change', updateTravel);
+      updateTravel();
+      body = [dest, effect,
+        h('button.hbtn.primary', { onclick: () => send({ type: 'sail', tile: Number(dest.value) }) }, `🧭 출발 · ${ECONOMY.charterFee}`),
         h('button.hbtn', { onclick: () => send({ type: 'pass' }) }, '지나가기')];
     } else if (pd.kind === 'takeover') {
-      body = [h('p.hprompt', `${t.name}의 이용료 정산을 마쳤어요. 현재 시설을 포함해 인수할 수 있습니다.`),
-        h('button.hbtn.primary', { onclick: () => send({ type: 'takeover' }) }, `인수 · ${money(pd.cost)}`, h('span.sub', `인수 후 현금 ${money(me.cash - pd.cost)}`)),
+      const o = g.owners[pd.tile];
+      const shield = this.P(o.pid).items?.deed;
+      body = [h('p.hprompt', shield ? '🛡 상대가 인수 방어권을 보유 중입니다. 이번 시도는 방어권 한 장을 소모하며, 인수 대금은 차감되지 않습니다.' : `${LEVEL_NAME[o.level]} 시설과 함께 내 도시가 됩니다. 다음 방문자부터 이용료를 받습니다.`),
+        h('button.hbtn.primary', { onclick: () => send({ type: 'takeover' }) }, shield ? '인수 시도 · 방어권 1장 소모' : `인수 · ${money(pd.cost)}`,
+          h('span.sub', shield ? `현금 ${money(me.cash)} 유지` : `인수 후 현금 ${money(me.cash - pd.cost)}`)),
         h('button.hbtn', { onclick: () => send({ type: 'pass' }) }, '인수 없이 출항')];
     } else if (pd.kind === 'buy') {
       const completesRegion = g.boardSize && REGION_PORTS[t.region].every(i => i === t.i || g.owners[i]?.pid === me.id);
       const fee = completesRegion ? t.toll[0] * ECONOMY.regionMultiplier : t.toll[0];
-      body = [h('p.hprompt', `${iga(t.name)} 비어 있어요. 매입 후 이용료 ${fee}.${completesRegion ? ' 이 항구를 사면 권역이 완성됩니다.' : ''}`),
+      body = [effectGrid([['매입 비용', `−${money(t.price)}`], ['방문자 이용료', `+${money(fee)}`], ['남는 현금', money(me.cash - t.price)]]),
+        completesRegion ? h('p.hprompt', '이 항구를 사면 권역이 완성됩니다.') : null,
         h('button.hbtn.primary', { onclick: () => send({ type: 'buy' }) }, h('span.main', `${t.short} 부두 매입 · ${t.price}`), h('span.sub', `구매 후 잔액 ${me.cash - t.price}`)),
         h('button.hbtn', { onclick: () => send({ type: 'pass' }) }, h('span.main', '지나가기'), h('span.sub', `잔액 ${me.cash} 유지`))];
     } else if (pd.kind === 'upgrade') {
       const lv = pd.level;
       const multiplier = ownedRegions(g, me.id).includes(t.region) ? ECONOMY.regionMultiplier : 1;
-      body = [h('p.hprompt', `내 항구 ${t.name}에 돌아왔어요. 확장하면 이용료가 ${t.toll[lv] * multiplier} → ${t.toll[lv + 1] * multiplier}로 오릅니다.`),
+      body = [effectGrid([['확장 비용', `−${money(t.upgrade)}`], ['이용료 변화', `${t.toll[lv] * multiplier} → ${t.toll[lv + 1] * multiplier}`], ['남는 현금', money(me.cash - t.upgrade)]]),
         h('button.hbtn.primary', { onclick: () => send({ type: 'upgrade' }) }, h('span.main', `${LEVEL_NAME[lv + 1]}로 확장 · ${t.upgrade}`), h('span.sub', `확장 후 잔액 ${me.cash - t.upgrade}`)),
         h('button.hbtn', { onclick: () => send({ type: 'pass' }) }, h('span.main', '지나가기'), h('span.sub', `잔액 ${me.cash} 유지`))];
     } else if (pd.kind === 'market') {
@@ -369,7 +512,16 @@ export class HarborScreen {
         ...portsOf(g, this.me).sort((a, b) => buybackOf(g, a) - buybackOf(g, b)).map(i => h('button.hbtn', { onclick: () => send({ type: 'sell', tile: i }) },
           h('span.main', `${this.tileData[i].name} 매각 · +${buybackOf(g, i)}`), h('span.sub', `매각 후 현금 ${me.cash + buybackOf(g, i)} / 필요 ${pd.owed}`)))];
     }
-    put(this.action, h('div.hact-row', ...body), this.timerEl);
+    const decision = DECISIONS[pd.kind];
+    if (decision && !this.decisionOpen) {
+      put(this.action, h('button.hbtn.primary', { onclick: () => { this.decisionOpen = true; this.renderAction(); } }, `${decision[0]} ${decision[1]} 다시 열기`), this.timerEl);
+    } else {
+      this.action.classList.toggle('decision-open', Boolean(decision));
+      put(this.action, decision ? h('header.hdecision-head', h('span.decision-icon', decision[0]),
+        h('div', h('strong', decision[1]), h('span', t?.name || this.tileData[me.pos].name)),
+        h('button.small', { onclick: () => { this.decisionOpen = false; this.renderAction(); } }, '보드 보기')) : null,
+      h('div.hact-row', ...body), this.timerEl);
+    }
     if (this.busy) this.action.querySelectorAll('button').forEach(b => { b.disabled = true; });
     this.renderTimer();
   }
@@ -424,6 +576,8 @@ export function iga(word) {
 function waitText(pd, cur, tiles) {
   const t = pd.tile !== undefined ? tiles[pd.tile] : null;
   switch (pd.kind) {
+    case 'order': return `${iga(cur.name)} 순서를 정할 주사위를 굴릴 차례`;
+    case 'bet': return `${iga(cur.name)} 홀짝 승부를 고르는 중`;
     case 'roll': return `${iga(cur.name)} 주사위를 굴릴 차례`;
     case 'buy': return `${iga(cur.name)} ${t.name} 매입을 고민 중`;
     case 'upgrade': return `${iga(cur.name)} ${t.name} 확장을 고민 중`;

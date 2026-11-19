@@ -47,3 +47,28 @@ export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('복사했습니다.', 'ok'); }
   catch { prompt('아래 내용을 복사하세요', text); }
 }
+
+export function roomChat(send) {
+  const input = h('input', { maxlength: 120, placeholder: '메시지 입력', 'aria-label': '채팅 메시지', required: true });
+  const list = h('div.chat-list', { role: 'log', 'aria-label': '채팅 기록' });
+  const button = h('button', { type: 'submit' }, '보내기');
+  const form = h('form.chat-form', { onsubmit: async e => {
+    e.preventDefault();
+    const message = input.value.trim();
+    if (!message || button.disabled) return;
+    button.disabled = true;
+    try { if (await send('chat', { message }) && input.value.trim() === message) input.value = ''; }
+    finally { button.disabled = false; }
+  } }, input, button);
+  let seq;
+  return {
+    input, node: h('div.room-chat', list, form),
+    update(messages) {
+      const next = messages.at(-1)?.seq ?? 0;
+      if (next === seq) return;
+      seq = next;
+      list.replaceChildren(...messages.map(m => h('div.chat-message', h('b', m.name), ' ', m.message)));
+      list.scrollTop = list.scrollHeight;
+    },
+  };
+}

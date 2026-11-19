@@ -75,7 +75,7 @@ test('두 게임 방을 동시에 열고 각자의 6자리 번호로 올바른 �
     const a = await call(base, `/api/codes/${life.code}`);
     const b = await call(base, `/api/codes/${harbor.code}`);
     assert.deepEqual([a.body.roomId, a.body.gameType, a.body.gameName], [life.roomId, 'life', '갈림길 인생']);
-    assert.deepEqual([b.body.roomId, b.body.gameType, b.body.capacity], [harbor.roomId, 'harbor', 4], '항구의 길 정원은 최대 4');
+    assert.deepEqual([b.body.roomId, b.body.gameType, b.body.capacity], [harbor.roomId, 'harbor', 8], '항구의 길 정원은 최대 8');
     assert.equal(b.body.hasPassword, false);
     // 번호와 닉네임만으로 참가
     const j = await call(base, `/api/rooms/${b.body.roomId}/join`, { name: '친구' });

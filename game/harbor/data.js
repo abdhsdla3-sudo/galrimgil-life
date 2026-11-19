@@ -18,7 +18,19 @@ export const ECONOMY = {
 
 export const ROUND_OPTIONS = [6, 8, 10, 12];
 export const TIME_OPTIONS = [30, 60, 90];
-export const PLAYER_LIMITS = { min: 2, max: 4, default: 4 };
+export const THEMES = { world: '세계 도시', korea: '한국 지역' };
+export const DICE_POWER = {
+  light: { name: '약하게', min: 2, max: 5, chance: 48 },
+  medium: { name: '보통', min: 6, max: 8, chance: 69 },
+  strong: { name: '강하게', min: 9, max: 12, chance: 48 },
+};
+export const ITEMS = {
+  deed: { name: '인수 방어권', icon: '🛡', effect: '상대의 다음 인수 시도를 자동으로 한 번 막습니다. 상대는 인수 대금을 내지 않습니다.' },
+  toll: { name: '통행권', icon: '🎟', effect: '다음 상대 도시 이용료를 자동으로 한 번 면제합니다.' },
+  supply: { name: '보급 상자', icon: '🧰', effect: '내 차례 주사위를 굴리기 전에 쓰면 현금 120을 받습니다.' },
+};
+export const PLAYER_LIMITS = { min: 2, max: 8, default: 8 };
+export const WAGERS = [50, 100, 200];
 
 // 기존 저장 방의 칸 번호를 유지하기 위해 신규 칸은 뒤에 추가한다.
 const LAYOUT = [
@@ -122,8 +134,34 @@ const LEGACY_TILES = TILES.slice(0, LEGACY_BOARD_SIZE).map((t, i) => {
   const name = LAYOUT[i][1];
   return { ...t, name, short: shortName(name), country: undefined };
 });
-export const tilesOf = g => g.boardSize ? TILES : LEGACY_TILES;
-export const regionNameOf = (g, region) => g.boardSize ? REGIONS[region].name : LEGACY_REGION_NAMES[region];
+const KOREA_CITIES = [
+  '서울 출발', '서울', '인천', '수도권 물류센터', '수원', '황금 카드',
+  '춘천', '강릉', '황금 카드', '속초', '강원 물류센터', '대전', '황금 카드',
+  '세종', '청주', '충청 물류센터', '전주', '황금 카드', '광주', '목포', '호남 물류센터',
+  '여수', '황금 카드', '순천', '구금소', '대구', '안동', '영남 물류센터',
+  '포항', '지역 관리비', '황금 카드', '부산', '전국 여행', '울산', '창원',
+  '지역 기금', '제주시', '황금 카드', '서귀포', '성산',
+];
+const KOREA_REGIONS = { west: '수도권', north: '강원', east: '충청', south: '호남 서부', cape: '호남 남해안', isles: '경북', strait: '부울경', ocean: '제주' };
+const GLOBAL_OVERRIDES = { 0: '세계 항로 출발', 1: '케이프타운', 2: '몸바사', 3: '아프리카 물류센터', 4: '잔지바르', 24: '구금소', 32: '세계 일주' };
+const PUBLIC_COUNTRIES = { 1: '남아프리카공화국', 2: '케냐', 4: '탄자니아' };
+const SPECIAL_SHORT = { start: '출발', market: '화물', event: '카드', shelter: '구금소', charter: '여행', tax: '관리비', fund: '기금', bet: '홀짝' };
+function themeTiles(theme) {
+  return TILES.map(t => {
+    const korea = theme === 'korea';
+    const type = t.i === 37 ? 'bet' : t.type;
+    const name = type === 'bet' ? '홀짝 승부' : korea ? KOREA_CITIES[t.i] : type === 'event' ? '황금 카드' : GLOBAL_OVERRIDES[t.i] || t.name;
+    return { ...t, type, name, short: SPECIAL_SHORT[type] || name,
+      country: korea ? (t.type === 'port' ? '대한민국' : undefined) : PUBLIC_COUNTRIES[t.i] || t.country };
+  });
+}
+const THEME_TILES = { korea: themeTiles('korea'), world: themeTiles('world') };
+export const tilesOf = g => g.boardSize ? THEME_TILES[g.settings?.theme] || TILES : LEGACY_TILES;
+export const regionNameOf = (g, region) => {
+  if (!g.boardSize) return LEGACY_REGION_NAMES[region];
+  if (g.settings?.theme === 'korea') return KOREA_REGIONS[region];
+  return g.settings?.theme === 'world' && region === 'west' ? '아프리카' : REGIONS[region].name;
+};
 
 function shortName(name) {
   return name.replace(/(화물시장|출항지|해역|해협|바다|목)$/, '').replace(/(항|포구|부두|만|곶)$/, '').trim() || name;
@@ -161,10 +199,14 @@ export const SHIPS = [
   { id: 'steamer', name: '증기선', color: '#38d6c4' },
   { id: 'junk', name: '정크선', color: '#ffd166' },
   { id: 'tug', name: '예인선', color: '#c3a6ff' },
+  { id: 'catamaran', name: '쌍동선', color: '#ff8acb' },
+  { id: 'ferry', name: '여객선', color: '#87bdff' },
+  { id: 'cargo', name: '화물선', color: '#9ddd73' },
+  { id: 'sub', name: '잠수함', color: '#ffad70' },
 ];
 
 export function defaultHarborSettings() {
-  return { rounds: 10, timeLimit: 60 };
+  return { rounds: 10, timeLimit: 60, theme: 'world' };
 }
 export function normalizeHarborSettings(input) {
   const s = input && typeof input === 'object' ? input : {};
@@ -172,11 +214,13 @@ export function normalizeHarborSettings(input) {
   return {
     rounds: ROUND_OPTIONS.includes(Number(s.rounds)) ? Number(s.rounds) : d.rounds,
     timeLimit: TIME_OPTIONS.includes(Number(s.timeLimit)) ? Number(s.timeLimit) : d.timeLimit,
+    theme: Object.hasOwn(THEMES, s.theme) ? s.theme : d.theme,
   };
 }
 
 // 시간 초과·연결 끊김 시 적용할 기본 행동 설명 (화면 안내용)
 export const DEFAULT_ACTION_TEXT = {
+  order: '순서 주사위 굴리기',
   roll: '주사위 굴리기',
   buy: '지나가기',
   upgrade: '지나가기',
@@ -185,4 +229,5 @@ export const DEFAULT_ACTION_TEXT = {
   takeover: '인수 없이 출항',
   charter: '쾌속선 이용 없이 출항',
   shelter: '주사위로 탈출 시도',
+  bet: '베팅 없이 지나가기',
 };

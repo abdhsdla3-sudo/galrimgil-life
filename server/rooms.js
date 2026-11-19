@@ -235,7 +235,6 @@ export class RoomManager {
     const gm = gameOf(room);
     switch (a.type) {
       case 'chat': {
-        if (room.status === 'lobby') err('게임이 시작된 뒤 채팅할 수 있습니다.');
         const message = typeof a.message === 'string' ? a.message.trim() : '';
         if (!message || message.length > 120) err('메시지를 1~120자로 입력하세요.');
         room.chat ||= [];
