@@ -18,6 +18,57 @@ const money = n => n.toLocaleString('ko-KR');
 const effectGrid = entries => h('dl.hdecision-effects', ...entries.map(([name, value]) =>
   h('div', h('dt', name), h('dd', value))));
 
+function diceCharge() {
+  const keys = Object.keys(DICE_POWER);
+  let value = 0, held = false, frame = 0, last = 0, stopped = false;
+  const meter = h('progress', { max: 100, value: 0, 'aria-label': '주사위 강도 게이지' });
+  const odds = h('span.dice-odds', '일반 · 기본 확률');
+  const power = () => keys[value >= 75 ? 2 : value >= 45 ? 1 : value >= 15 ? 0 : -1];
+  const refresh = () => {
+    meter.value = value;
+    const target = DICE_POWER[power()];
+    const text = target ? `${target.name} · ${target.min}~${target.max} 약 ${target.chance}%` : '일반 · 기본 확률';
+    if (odds.textContent !== text) odds.textContent = text;
+  };
+  const tick = now => {
+    const elapsed = Math.min(now - last, 100);
+    last = now;
+    value = Math.max(0, Math.min(100, value + elapsed * (held ? 0.095 : -0.03125)));
+    refresh();
+    frame = (held ? value < 100 : value > 0) ? requestAnimationFrame(tick) : 0;
+  };
+  const hold = enabled => {
+    if (stopped) return;
+    held = enabled;
+    if (!frame) {
+      last = performance.now();
+      frame = requestAnimationFrame(tick);
+    }
+  };
+  const describe = 'dice-charge-help';
+  const button = h('button.hcharge', { type: 'button', 'aria-describedby': describe,
+    onpointerdown: e => {
+      if (!e.isPrimary || e.button !== 0) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      hold(true);
+    },
+    onpointerup: () => hold(false), onpointercancel: () => hold(false), onlostpointercapture: () => hold(false),
+    onkeydown: e => {
+      if (e.key !== ' ' && e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!e.repeat) hold(true);
+    },
+    onkeyup: e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); hold(false); } },
+    onblur: () => hold(false),
+  }, '꾹 눌러 강도 올리기');
+  return {
+    node: h('div.dice-power', h('b', '주사위 강도'), odds, meter, button,
+      h('small#' + describe, '놓으면 게이지가 내려갑니다. 원하는 강도에서 주사위를 눌러 굴리세요.')),
+    power,
+    stop: () => { stopped = true; cancelAnimationFrame(frame); },
+  };
+}
+
 // 칸 번호 → 격자 위치 (왼쪽 위에서 시계 방향)
 export function tileCell(i, size = BOARD_SIZE) {
   const edge = size / 4;
@@ -66,6 +117,7 @@ export class HarborScreen {
   destroy() {
     this.destroyed = true;
     clearInterval(this.timer); clearTimeout(this.stepTimer); clearTimeout(this.highlightTimer);
+    this.charge?.stop();
     this.chatDialog?.close();
     document.querySelectorAll('.modal-back').forEach(m => m.remove());
   }
@@ -402,6 +454,8 @@ export class HarborScreen {
   // ---------- 행동 ----------
   renderAction() {
     const g = this.g;
+    this.charge?.stop();
+    this.charge = null;
     this.action.classList.remove('decision-open');
     if (g.phase === 'over') return put(this.action, h('div.hact-row', ...this.resultButtons()));
     const pd = g.pending, me = this.P(this.me);
@@ -418,6 +472,7 @@ export class HarborScreen {
     const send = (action) => {
       if (this.busy) return;
       this.busy = true;
+      this.charge?.stop();
       this.action.querySelectorAll('button').forEach(b => { b.disabled = true; });
       if (action.type === 'roll') {
         const count = g.boardSize && pd.kind !== 'order' ? 2 : 1;
@@ -434,17 +489,9 @@ export class HarborScreen {
       body = [h('p.hprompt', '주사위 한 개로 순서를 정합니다. 높은 눈부터 출항하고 동점자만 다시 굴립니다.'),
         h('button.hbtn.primary.hroll', { onclick: () => send({ type: 'roll' }) }, '🎲 순서 주사위')];
     } else if (pd.kind === 'roll') {
-      let power;
-      const keys = Object.keys(DICE_POWER);
-      const odds = h('output.dice-odds', '일반 · 기본 확률');
-      body = [g.settings.theme ? h('label.dice-power', h('span', '주사위 강도'), odds, h('input', {
-        type: 'range', 'aria-label': '주사위 강도', min: 0, max: 3, value: 0, oninput: e => {
-          power = keys[Number(e.target.value) - 1];
-          const target = DICE_POWER[power];
-          odds.textContent = target ? `${target.name} · 합계 ${target.min}~${target.max} 확률 약 ${target.chance}%` : '일반 · 기본 확률';
-        },
-      })) : null,
-      h('button.hbtn.primary.hroll', { onclick: () => send({ type: 'roll', power }) }, h('span.main', '🎲 주사위'),
+      this.charge = g.settings.theme ? diceCharge() : null;
+      body = [this.charge?.node,
+      h('button.hbtn.primary.hroll', { onclick: () => send({ type: 'roll', power: this.charge?.power() }) }, h('span.main', '🎲 주사위'),
         h('span.sub', `출발까지 ${(this.size - me.pos) % this.size || this.size}칸 · 보급금 +${ECONOMY.supply}`)),
       me.items?.supply ? h('button.hbtn.alt', { onclick: () => send({ type: 'useSupply' }) }, `🧰 보급 상자 사용 · 현금 +${ECONOMY.supply}`) : null];
     } else if (pd.kind === 'bet') {

@@ -16,6 +16,9 @@
 .continue { margin-bottom: 16px; }
 .continue h2, .games h2 { margin: 12px 0 8px; }
 .continue-list { display: grid; gap: 8px; }
+.continue-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+.continue-row > button { min-height: 44px; }
+.continue-remove { padding-inline: 12px; }
 .continue-item { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; text-align: left; width: 100%; padding: 10px 14px; background: #fff; }
 .continue-item .go { margin-left: auto; color: var(--accent-d); font-weight: bold; }
 .game-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 16px; }
@@ -63,7 +66,7 @@
 .hround { font-family: 'Jua', sans-serif; background: var(--sea2); border-radius: 99px; padding: 2px 12px; }
 .hmenu { margin-left: auto; display: flex; gap: 6px; }
 .harbor .hmenu button { min-height: 44px; color: var(--sea); }
-.hbody { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; grid-template-areas: "main players" "main action" "main detail" "main extra"; grid-template-rows: auto auto auto 1fr; gap: 12px 16px; padding: 12px 16px; max-width: 1400px; margin: 0 auto; }
+.hbody { display: grid; grid-template-columns: minmax(0, 1fr) clamp(21rem, 21vw, 30rem); grid-template-areas: "main players" "main action" "main detail" "main extra"; grid-template-rows: auto auto auto 1fr; gap: 12px 16px; padding: 12px clamp(16px, 2vw, 36px); max-width: 2700px; margin: 0 auto; }
 .hmain { grid-area: main; min-width: 0; }
 .hplayers { grid-area: players; }
 .haction { grid-area: action; }
@@ -235,11 +238,11 @@
 .hboard-tools button, .hmenu button { min-height: 44px; }
 .harbor button.small { color: #e5f1ff; background: #28496a; border-color: #6486ab; box-shadow: none; }
 .hmenu button { padding: 5px 8px; white-space: nowrap; }
-.hboard-view { overflow: auto; max-height: min(76vh, 840px); overscroll-behavior: contain; border-radius: 16px; }
-.hboard-view .hboard { min-width: calc(var(--side, 7) * 74px); max-width: 1040px; }
+.hboard-view { overflow: auto; max-height: 78svh; overscroll-behavior: contain; border-radius: 16px; }
+.hboard-view .hboard { --tile-size: clamp(104px, 6.5vw, 154px); min-width: calc(var(--side, 7) * var(--tile-size)); max-width: max(calc(var(--side, 7) * var(--tile-size)), 84svh); }
 .hboard-view.overview .hboard { min-width: 0; max-width: 100%; }
-.hboard-view:not(.overview) .htile { min-height: 66px; padding: 9px 4px 4px; font-size: clamp(12px, 1vw, 16px); }
-.hboard-view:not(.overview) .ht-pawns { width: min(100%, 62px); }
+.hboard-view:not(.overview) .htile { min-height: 94px; padding: 11px 5px 5px; font-size: clamp(14px, 1vw, 20px); }
+.hboard-view:not(.overview) .ht-pawns { width: min(100%, 80px); }
 .hboard-view:not(.overview) .ht-pawns .ship { aspect-ratio: 1.55; }
 .htile.occupied .ht-own { display: flex; }
 .htile.occupied .ht-toll { display: none; }
@@ -262,8 +265,12 @@
 .hdice-strip .rolling .die:first-child { animation: hdice .65s cubic-bezier(.2,.7,.3,1); }
 .hdice-strip .rolling .die:nth-child(2) { animation: hdice .82s cubic-bezier(.2,.7,.3,1); }
 .hdice-strip .casting .die { animation: hdice .65s ease-in-out infinite; }
-.dice-power { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
-.dice-power input { grid-column: 1 / -1; width: 100%; min-height: 36px; accent-color: #ffd166; }
+.dice-power { display: grid; grid-template-columns: auto 1fr; gap: 7px 8px; align-items: center; }
+.dice-power progress, .dice-power button, .dice-power small { grid-column: 1 / -1; width: 100%; }
+.dice-power progress { height: 16px; accent-color: #ffd166; }
+.harbor .hcharge { min-height: 44px; touch-action: none; user-select: none; background: #274d72; color: #fff; border-color: #83a7cf; box-shadow: none; }
+.harbor .hcharge:active { background: #3c648e; }
+.dice-power small { color: #c6d9ee; }
 .dice-odds { color: #ffe092; text-align: right; font-size: .8rem; }
 .harbor .hroll { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
 .hfeedback, .hcard-reveal { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px; margin-bottom: 8px; }

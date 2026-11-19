@@ -164,15 +164,26 @@ async function fillContinue(box) {
       return res.ok ? { ...seat, ...j } : null;
     } catch { return null; }
   }));
-  const live = checks.filter(x => x && x.status !== 'over');
-  if (!live.length || !box.isConnected) return;
-  box.hidden = false;
-  box.replaceChildren(h('h2', '이어서 플레이'), h('div.continue-list', ...live.slice(0, 3).map(x => {
-    const meta = gameMeta(x.gameType);
-    return h('button.continue-item', { type: 'button', onclick: () => go('/r/' + x.id) },
-      h('b', meta.name), h('span', x.status === 'lobby' ? '대기실' : '게임 중'),
-      x.code ? h('span.mono', `번호 ${x.code}`) : null, h('span', `${x.name || ''} 님의 자리`), h('span.go', '이어서 플레이 →'));
-  })));
+  if (!box.isConnected) return;
+  const draw = () => {
+    const live = checks.filter(x => x && x.status !== 'over' && loadSeat(x.id)?.token === x.token);
+    box.hidden = !live.length;
+    if (!live.length) return box.replaceChildren();
+    const rows = live.slice(0, 3).map(x => {
+      const meta = gameMeta(x.gameType);
+      return h('div.continue-row',
+        h('button.continue-item', { type: 'button', onclick: () => go('/r/' + x.id) },
+          h('b', meta.name), h('span', x.status === 'lobby' ? '대기실' : '게임 중'),
+          x.code ? h('span.mono', `번호 ${x.code}`) : null, h('span', `${x.name || ''} 님의 자리`), h('span.go', '이어서 플레이 →')),
+        h('button.continue-remove', { type: 'button', 'aria-label': `${meta.name}${x.code ? ' 방 번호 ' + x.code : ''} 이어하기 기록 삭제`, onclick: () => {
+          if (!confirm('이 브라우저에서 이어하기 기록을 삭제할까요? 다시 들어가려면 복구 코드가 필요할 수 있어요.')) return;
+          clearSeat(x.id);
+          draw();
+        } }, '삭제'));
+    });
+    box.replaceChildren(h('h2', '이어서 플레이'), h('div.continue-list', ...rows));
+  };
+  draw();
 }
 
 function createForm(type) {
