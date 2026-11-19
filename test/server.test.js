@@ -67,11 +67,26 @@ test('중복 요청, 오래된 화면의 요청, 잘못된 차례는 거부', as
     const stale = await call(base, `/api/rooms/${id}/act`, { type: 'game', pendingId: pid0, action: { type: 'simul', index: 0 } }, host.token);
     assert.equal(stale.status, 409, '이전 단계에 대한 늦은 요청 거부');
     await Promise.all([host, b].map((t, i) => call(base, `/api/rooms/${id}/act`, { type: 'game', pendingId: room.game.pending.id, action: { type: 'simul', index: [...room.game.pending.perPlayer[t.memberId]].findIndex(o => !o.disabled) } }, t.token)));
+    assert.equal(room.game.pending.sub, 'order');
+    while (room.game.pending.sub === 'order') {
+      const pd = room.game.pending;
+      const responses = await Promise.all([host, b].filter(t => pd.who.includes(t.memberId)).map(t =>
+        call(base, `/api/rooms/${id}/act`, { type: 'game', pendingId: pd.id, action: { type: 'simul', index: 0 } }, t.token)));
+      assert.ok(responses.every(r => r.body.state.version === r.body.version));
+    }
     assert.equal(room.game.pending.kind, 'turn');
     const notMe = room.game.pending.pid === host.memberId ? b : host;
     const wrong = await call(base, `/api/rooms/${id}/act`, { type: 'game', pendingId: room.game.pending.id, action: { type: 'roll' } }, notMe.token);
     assert.equal(wrong.status, 400);
     assert.match(wrong.body.error, /차례/);
+    const pendingId = room.game.pending.id;
+    const chat = { type: 'chat', message: '  안녕하세요!  ', actionId: 'chat-1' };
+    const sent = await call(base, `/api/rooms/${id}/act`, chat, notMe.token);
+    assert.equal(sent.body.state.chat.at(-1).message, '안녕하세요!');
+    assert.equal(sent.body.state.chat.at(-1).pid, notMe.memberId);
+    assert.equal(sent.body.state.game.pending.id, pendingId);
+    const duplicate = await call(base, `/api/rooms/${id}/act`, chat, notMe.token);
+    assert.equal(duplicate.body.state.chat.length, 1);
   } finally { await s.close(); }
 });
 

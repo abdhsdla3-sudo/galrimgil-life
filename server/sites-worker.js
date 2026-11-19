@@ -1,5 +1,5 @@
 import { RoomManager, RoomError, ROOM_SCHEMA } from './rooms.js';
-import { SCHEMA_VERSION } from '../game/engine.js';
+import { restoreGame, SCHEMA_VERSION } from '../game/engine.js';
 import assets from 'sites-assets';
 
 const EXPIRY = { lobby: 86400e3, playing: 30 * 86400e3, over: 3 * 86400e3 };
@@ -48,6 +48,7 @@ async function roomRequest(db, id, action, now) {
     if (!row) fail('방을 찾을 수 없습니다. 링크를 확인하거나 만료되었는지 확인하세요.', 404);
     const room = JSON.parse(row.state);
     if (room.schema !== ROOM_SCHEMA || (room.game && room.game.schema !== SCHEMA_VERSION)) fail('저장 형식 버전이 다릅니다.', 410);
+    restoreGame(room.game);
     const manager = new HostedRooms({ now: () => now });
     manager.rooms.set(id, room);
     const result = action(manager, room);

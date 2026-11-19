@@ -17,8 +17,8 @@ const STAT_SHORT = { smart: '지', body: '체', sense: '감', social: '사' };
 export class GameScreen {
   constructor(root, deps) {
     this.root = root; this.d = deps;
-    this.boardId = null; this.lastFeed = null; this.feedQueue = []; this.showingFeed = null;
-    this.turnMarks = []; this.lastTurnKey = null; this.logFilter = 'all'; this.lastLogLen = null;
+    this.boardId = null;
+    this.turnMarks = []; this.lastTurnKey = null; this.logFilter = 'all';
     this.prevCash = null; this.animating = false; this.dialogMin = null;
     this.speedLocal = load('glg.speed');
     this.build();
@@ -26,7 +26,13 @@ export class GameScreen {
     this.board.zoom = load('glg.zoom') || 'fit';
     this.timer = setInterval(() => this.tickTimer(), 500);
   }
-  destroy() { clearInterval(this.timer); this.board.ro?.disconnect(); document.querySelectorAll('.modal-back').forEach(m => m.remove()); }
+  destroy() {
+    this.destroyed = true;
+    clearInterval(this.timer);
+    clearTimeout(this.chatBubbleTimer);
+    this.board.ro?.disconnect();
+    document.querySelectorAll('.modal-back').forEach(m => m.remove());
+  }
   get me() { return this.d.S.memberId; }
   get speed() { return this.speedLocal || this.room?.settings.speed || 'normal'; }
 
@@ -36,53 +42,65 @@ export class GameScreen {
     this.hud = h('div.hud');
     this.stepBadge = h('div.step-badge');
     this.bannerBox = h('div.banner-layer');
-    this.feedBox = h('div.event-layer');
     this.dialog = h('div.dialog-layer');
     this.zoomBar = h('div.zoom-bar');
     this.actionBox = h('section.action');
     this.playersBox = h('section.players');
     this.logBox = h('aside.log');
+    this.buildChat();
     this.board = new BoardView(this.boardBox, (n) => modal(nodeInfo(this.g.board, n, this.g.players)));
     this.main = h('div.game',
       this.top,
       this.body = h('div.game-body' + (load('glg.logClosed') === '1' ? '.log-closed' : ''),
         this.logBox,
-        h('div.board-wrap', this.boardBox, this.hud, this.stepBadge, this.zoomBar, this.dialog, this.feedBox, this.bannerBox),
+        h('div.board-wrap', this.boardBox, this.hud, this.stepBadge, this.zoomBar, this.dialog, this.bannerBox, this.chatBubble, this.chatPanel),
         h('aside.side', this.actionBox, this.playersBox)));
     this.root.replaceChildren(this.main);
     this.renderZoom();
   }
 
   async update(room) {
+    const previous = this.room;
     this.room = room;
     this.serverOffset = room.now - Date.now();
     if (room.boardId !== this.boardId) {
-      const { board } = await this.d.api(`/api/rooms/${room.id}/board`);
+      this.boardRequest ||= this.d.api(`/api/rooms/${room.id}/board`).finally(() => { this.boardRequest = null; });
+      let board;
+      try { ({ board } = await this.boardRequest); }
+      catch (e) { if (this.room === room && !this.destroyed) toast(e.message, 'err'); return; }
+      if (this.room !== room || this.destroyed) return;
       this.boardId = room.boardId; this.boardData = board;
       this.board.setBoard(board);
-      this.lastFeed = null; this.prevCash = null; this.lastLogLen = null;
+      this.g = null; this.prevCash = null; this.lastLogSeq = null;
     }
-    if (this.room !== room) return; // 더 최신 상태가 이미 도착
+    this.renderChat(room.chat || []);
     const g = { ...room.game, board: this.boardData };
+    const pd = g.pending;
+    const gameKey = `${pd.id}:${g.logSeq}:${Object.keys(pd.responses || {}).length}`;
+    if (this.g && gameKey === this.gameKey) {
+      if (room.hostId !== previous?.hostId || room.members.some((m, i) => m.online !== previous?.members[i]?.online)) this.renderPlayers();
+      this.tickTimer();
+      return;
+    }
+    const firstLoad = !this.g;
+    this.gameKey = gameKey;
     this.g = g;
     this.labels = pawnLabels(g.players);
     document.title = `${g.phase === 'over' ? '결과' : `${g.round}라운드`} — 갈림길 인생`;
     const curId = g.pending?.pid || g.order[g.turnIdx];
-    const firstLoad = this.lastFeed === null;
     // 턴 소요 시간 측정 (남은 시간 보정용)
-    const key = `${g.order[g.turnIdx]}:${g.round}`;
+    const key = g.phase === 'play' ? `${curId}:${P(g, curId).turns}` : null;
     const turnChanged = key !== this.lastTurnKey;
-    if (turnChanged) {
+    if (turnChanged && key) {
       this.turnMarks.push(Date.now()); if (this.turnMarks.length > 25) this.turnMarks.shift();
       if (this.lastTurnKey && g.order[g.turnIdx] === this.me && g.phase === 'play') { sfx('turn'); if (document.hidden) document.title = '🔔 내 차례! — 갈림길 인생'; }
       this.lastTurnKey = key;
     }
-    const newFeeds = firstLoad ? [] : g.feed.filter(f => f.seq > this.lastFeed);
-    this.lastFeed = g.feed.length ? g.feed[g.feed.length - 1].seq : 0;
     const roll = g.lastRoll && g.lastRoll.seq !== this.lastRollSeq ? g.lastRoll : null;
     const cashBefore = this.prevCash;
     this.prevCash = Object.fromEntries(g.players.map(p => [p.id, p.cash]));
-    const moving = !firstLoad && g.players.some(p => (this.board.disp[p.id] ?? p.pos) !== p.pos) && STEP_MS[this.speed] > 0;
+    const moved = !firstLoad && g.players.some(p => (this.board.disp[p.id] ?? p.pos) !== p.pos);
+    const moving = moved && !document.hidden && STEP_MS[this.speed] > 0;
 
     this.animating = moving;
     this.renderTop();
@@ -90,35 +108,32 @@ export class GameScreen {
     this.renderAction();
     this.renderLog();
     this.renderHud();
-    if (roll && !firstLoad) { this.lastRollSeq = roll.seq; this.showDice(roll); }
+    if (roll && !firstLoad && !document.hidden) { this.lastRollSeq = roll.seq; this.showDice(roll); }
     else if (roll) this.lastRollSeq = roll.seq;
-    // 말 이동 연출 → 돈 변화 → 사건 카드 → 다음 차례 안내
-    // 창이 백그라운드이거나 밀린 연출이 있으면 이동 연출을 생략해 화면이 실제 진행을 따라가게 한다
-    this.animBacklog = (this.animBacklog || 0) + 1;
     this.animChain = (this.animChain || Promise.resolve()).then(() => {
-      const fast = firstLoad || document.hidden || this.animBacklog > 1;
-      return this.board.animateTo(g.players, curId, fast ? 0 : STEP_MS[this.speed], (nid, left, p) => {
+      if (this.g !== g || this.destroyed) return;
+      return this.board.animateTo(g.players, curId, moving ? STEP_MS[this.speed] : 0, (left, p) => {
         sfx('step');
         this.showSteps(p, left);
-        this.board.scrollTo(nid);
-      });
-    }).finally(() => { this.animBacklog--; });
+      }, () => this.g !== g || this.destroyed || document.hidden);
+    });
     await this.animChain;
+    if (this.g !== g || this.destroyed) return;
     this.showSteps(null);
-    if (this.room !== room) return;
+    if (firstLoad || (moved && this.board.zoom === 'big' && !document.hidden)) this.board.scrollTo(P(g, curId)?.pos, 'instant');
     if (this.animating) { this.animating = false; this.renderAction(); }
+    if (!firstLoad && previous?.game.pending.id !== pd.id && pd.kind === 'confirm' && pd.pid === this.me) {
+      sfx(pd.lines.some(l => /실패|실직|강등/.test(l)) ? 'bad' : pd.lines.some(l => /성공|승진|결혼|탄생/.test(l)) ? 'good' : 'coin');
+    }
     if (cashBefore) for (const p of g.players) {
       const d = p.cash - (cashBefore[p.id] ?? p.cash);
       if (d) this.board.floatText(p.id, `${d > 0 ? '+' : ''}${d}만`, d > 0 ? 'up' : 'down');
     }
-    if (firstLoad) this.board.scrollTo(P(g, curId)?.pos);
-    for (const f of newFeeds) this.pushFeed(f);
-    if (g.phase === 'over' && !this.resultsShown) { this.resultsShown = true; setTimeout(() => this.showResults(), firstLoad ? 0 : 1500); }
-    if (this.highlightTurn !== key && g.phase === 'play') {
+    if (g.phase === 'over' && !this.resultsShown) { this.resultsShown = true; if (!firstLoad) sfx('fanfare'); this.showResults(); }
+    if (key && this.highlightTurn !== key) {
       this.highlightTurn = key;
       const cur = P(g, g.order[g.turnIdx]);
-      this.board.scrollTo(cur?.pos);
-      if (!firstLoad && cur) this.showBanner(cur);
+      if (!firstLoad && pd.kind === 'turn' && cur) this.showBanner(cur);
     }
   }
 
@@ -142,7 +157,7 @@ export class GameScreen {
         const p = P(g, id);
         const isCur = g.phase === 'play' && !simul && id === cur?.id;
         return h('span.oslot' + (isCur ? '.cur' : '') + (p.finished ? '.done' : '') + (simul && waiting.has(id) ? '.wait' : ''),
-          { title: `${p.name}${id === this.me ? ' (나)' : ''}${p.finished ? ' · 은퇴' : ''}`, onmouseenter: () => this.board.spotlight(id), onmouseleave: () => this.board.spotlight(null), onclick: () => this.board.scrollTo(this.board.disp[id] ?? p.pos) },
+          { title: `${p.name}${id === this.me ? ' (나)' : ''}${p.finished ? ' · 은퇴' : ''}${g.orderRolls?.[id]?.length ? ' · 순서 주사위 ' + g.orderRolls[id].join(' → ') : ''}`, onmouseenter: () => this.board.spotlight(id), onmouseleave: () => this.board.spotlight(null), onclick: () => this.board.scrollTo(this.board.disp[id] ?? p.pos) },
           this.avatar(p), isCur ? h('b.oname', id === this.me ? '내 차례' : `${p.name} 차례`) : null);
       })),
       simul ? h('span.turn-chip.all', `모두 선택 중 ${g.pending.who.length - waiting.size}/${g.pending.who.length}`) : null,
@@ -152,14 +167,64 @@ export class GameScreen {
       g.phase !== 'over' ? h('span.small', { title: this.observedPerTurn() ? '실제 차례 소요 시간으로 보정' : '' }, `남은 약 ${Math.max(1, Math.round(remMin * 0.8))}~${Math.max(2, Math.round(remMin * 1.3))}분`) : null,
       h('select.speed', { title: '내 화면의 연출 속도 (결과에는 영향 없음)', onchange: (e) => { this.speedLocal = e.target.value; save('glg.speed', e.target.value); } },
         ...Object.entries(SPEEDS).map(([k, v]) => h('option', { value: k, selected: this.speed === k }, '연출: ' + v))),
+      h('button.small', { 'aria-controls': 'game-chat', 'aria-expanded': String(!this.chatPanel.hidden), onclick: (e) => this.toggleChat(e.currentTarget) }, '채팅'),
       h('button.small', { onclick: () => this.menu() }, '메뉴'),
     );
     this.tickTimer();
   }
   renderZoom() {
     put(this.zoomBar, h('span.small', '보드'), ...Object.entries(ZOOMS).map(([k, v]) => h('button.small' + (this.board.zoom === k ? '.on' : ''), {
-      onclick: () => { this.board.setZoom(k); save('glg.zoom', k); this.renderZoom(); const p = this.g && P(this.g, this.g.pending?.pid || this.g.order[this.g.turnIdx]); if (p) setTimeout(() => this.board.scrollTo(p.pos), 50); },
-    }, v)));
+      onclick: () => { this.board.setZoom(k); save('glg.zoom', k); this.renderZoom(); this.centerBoard('instant'); },
+    }, v)), this.board.zoom !== 'all' ? h('button.small', { onclick: () => this.centerBoard() }, '현재 말 보기') : null);
+  }
+  centerBoard(behavior) {
+    if (!this.g) return;
+    const id = this.g.pending?.pid || this.g.order[this.g.turnIdx];
+    this.board.scrollTo(this.board.disp[id] ?? P(this.g, id)?.pos, behavior);
+  }
+  buildChat() {
+    this.chatInput = h('input', { maxlength: 120, placeholder: '메시지 입력', 'aria-label': '채팅 메시지', required: true });
+    this.chatList = h('div.chat-list', { role: 'log', 'aria-label': '채팅 기록' });
+    this.chatBubble = h('div.chat-bubble', { hidden: true });
+    const bubbles = h('input', { type: 'checkbox', checked: load('glg.chatBubbles') === '1', onchange: e => {
+      save('glg.chatBubbles', e.target.checked ? '1' : '0');
+      if (!e.target.checked) this.chatBubble.hidden = true;
+    } });
+    const send = h('button.small', { type: 'submit' }, '보내기');
+    const form = h('form.chat-form', { onsubmit: async e => {
+      e.preventDefault();
+      const message = this.chatInput.value.trim();
+      if (!message || send.disabled) return;
+      send.disabled = true;
+      try {
+        if (await this.d.send('chat', { message }) && this.chatInput.value.trim() === message) this.chatInput.value = '';
+      } finally { send.disabled = false; }
+    } }, this.chatInput, send);
+    this.chatPanel = h('section.chat-panel#game-chat', { hidden: true, 'aria-label': '방 채팅' },
+      h('header', h('b', '방 채팅'), h('label.inline', bubbles, '말풍선 표시')), this.chatList, form);
+  }
+  toggleChat(button) {
+    this.chatPanel.hidden = !this.chatPanel.hidden;
+    button.setAttribute('aria-expanded', String(!this.chatPanel.hidden));
+    if (!this.chatPanel.hidden) {
+      this.chatList.scrollTop = this.chatList.scrollHeight;
+      this.chatInput.focus({ preventScroll: true });
+    }
+  }
+  renderChat(messages) {
+    const newest = messages.at(-1);
+    const seq = newest?.seq ?? 0;
+    if (seq === this.chatSeq) return;
+    const isNew = this.chatSeq !== undefined && seq > this.chatSeq;
+    this.chatSeq = seq;
+    put(this.chatList, ...messages.map(m => h('div.chat-message', h('b', m.name), ' ', m.message)));
+    this.chatList.scrollTop = this.chatList.scrollHeight;
+    if (isNew && load('glg.chatBubbles') === '1') {
+      put(this.chatBubble, h('b', newest.name), ' ', newest.message);
+      this.chatBubble.hidden = false;
+      clearTimeout(this.chatBubbleTimer);
+      this.chatBubbleTimer = setTimeout(() => { this.chatBubble.hidden = true; }, 4500);
+    }
   }
   avatar(p, cls = '') {
     return h('span.av' + cls, { style: { background: p.color } }, this.labels?.[p.id] || p.name.slice(0, 1));
@@ -327,7 +392,16 @@ export class GameScreen {
     if (!pd || g.phase === 'over') { add(box, h('h3', '게임 종료'), h('button.primary', { onclick: () => this.showResults() }, '결과 보기')); put(this.dialog); return; }
     const mine = pd.kind === 'simul' ? pd.who.includes(this.me) && !(this.me in pd.responses) : pd.pid === this.me;
     const actor = pd.pid ? P(g, pd.pid) : null;
-    const go = (action) => this.d.send('game', { action, pendingId: pd.id });
+    const go = async (action) => {
+      if (this.g.pending.id !== pd.id || this.submitting === pd.id || this.animating) return;
+      this.submitting = pd.id;
+      this.renderAction();
+      try { await this.d.send('game', { action, pendingId: pd.id }); }
+      finally {
+        if (this.submitting === pd.id) this.submitting = null;
+        if (!this.destroyed && this.g.pending.id === pd.id) this.renderAction();
+      }
+    };
     const defaultNote = (opts) => {
       if (!this.room.settings.timeLimit) return null;
       const d = opts.find(o => o.default && !o.disabled) || opts.find(o => !o.disabled);
@@ -337,21 +411,33 @@ export class GameScreen {
     const autoBtn = offlineWaiters.length ? h('button.warnbtn', { onclick: () => this.d.send('autoResolve') }, `연결 끊긴 ${offlineWaiters.map(id => P(g, id).name).join(', ')} 자동 진행`) : null;
     const hint = h('p.hint', '👉 보드 가운데 창에서 고르세요');
     let center = null; // { title, text, lines, body, dock }
+    if (this.animating || (mine && this.submitting === pd.id)) {
+      add(box, h('h3', this.animating ? '말 이동 중…' : '행동 처리 중…'));
+      put(this.dialog);
+      this.board.highlight([]);
+      return;
+    }
 
     if (pd.kind === 'simul') {
       const opts = pd.perPlayer?.[this.me] || pd.options;
       const done = pd.who.filter(id => id in pd.responses).length;
-      add(box, h('h3', pd.title), h('p.small', `응답 ${done}/${pd.who.length}명 · 결과는 모두 고른 뒤 차례 순서대로 적용됩니다.`));
+      add(box, h('h3', pd.title), h('p.small', `응답 ${done}/${pd.who.length}명`));
       if (mine) {
         box.classList.add('mine');
         add(box, hint);
         center = { title: pd.title, text: pd.text, sub: `모두 동시에 고릅니다 · 응답 ${done}/${pd.who.length}명`, body: [h('div.opts', ...opts.map((o, i) => optionButton(o, () => go({ type: 'simul', index: i })))), defaultNote(opts)] };
-      } else if (pd.who.includes(this.me)) add(box, h('p.ok', '선택 완료! 다른 사람을 기다리는 중…'));
+      } else {
+        if (pd.who.includes(this.me)) add(box, h('p.ok', pd.sub === 'order' ? `주사위 ${pd.responses[this.me]} · 다른 사람을 기다리는 중…` : '선택 완료! 다른 사람을 기다리는 중…'));
+        if (pd.sub === 'order') center = { title: pd.title, text: pd.text };
+      }
       add(box, autoBtn);
     } else if (!mine) {
       box.style.setProperty('--pc', actor.color);
       add(box, h('div.wait-head', this.avatar(actor, '.lg'), h('div', h('h3', `${actor.name} 님 차례`), h('div.small', waitText(pd)))));
-      if (pd.kind === 'choice' || pd.kind === 'branch') add(box, h('div.preview', h('b', pd.title || '갈림길'), pd.text ? h('p.small', pd.text) : null, h('div.opts.ro', ...pd.options.map(o => optionButton(o, null)))));
+      if (pd.kind === 'choice' || pd.kind === 'branch') center = { title: pd.title || '갈림길', text: pd.text, body: [h('div.opts.ro', ...pd.options.map(o => optionButton(o, null)))] };
+      if (pd.kind === 'reroll') center = { title: pd.title, text: '판정에 실패했습니다. 다시 굴릴지 선택하는 중입니다.', lines: pd.ctx.lines };
+      if (pd.kind === 'confirm' && !this.room.settings.skipRepeat) center = { title: pd.title, text: pd.text, lines: pd.lines };
+      if (center) center = { ...center, actor, sub: '다른 플레이어의 차례' };
       add(box, autoBtn);
     } else {
       const me = P(g, this.me);
@@ -360,6 +446,10 @@ export class GameScreen {
       if (pd.kind === 'turn') {
         const roll = () => { sfx('dice'); go({ type: 'roll' }); };
         add(box, h('h3.mine', '🎲 내 차례!'), h('button.primary.big.dice', { onclick: roll }, '🎲 주사위 굴리기'));
+        if (pd.canPlan) add(box, h('button', { onclick: () => go({ type: 'life' }) }, '생활 선택'));
+        if (g.round === 1 && !me.turns && g.orderRolls) {
+          add(box, h('p.small', `시작 순서 · ${g.order.map(id => `${P(g, id).name} ${g.orderRolls[id]?.join('→')}`).join(' · ')}`));
+        }
         const cards = pd.cards || [];
         if (cards.length) {
           add(box, h('h4', '카드 (주사위 전에 사용, 차례를 쓰지 않음)'));
@@ -371,6 +461,10 @@ export class GameScreen {
         }
         add(box, defaultNote([{ label: '주사위 굴리기' }]));
         center = { dock: true, body: [h('button.primary.big.dice.dock-dice', { onclick: roll }, '🎲 주사위 굴리기'), cards.length ? h('div.small.dock-note', `카드 ${cards.length}장 · 오른쪽 패널에서 먼저 쓸 수 있어요`) : null] };
+      } else if (pd.kind === 'confirm') {
+        const label = pd.returnTo === 'turn' ? '이동 준비로 돌아가기' : '결과 확인하고 차례 넘기기';
+        add(box, h('h3.mine', '차례 결과'), hint);
+        center = { title: pd.title, text: pd.text, lines: pd.lines, body: [h('button.primary', { onclick: () => go({ type: 'confirm' }) }, label)] };
       } else if (pd.kind === 'branch') {
         add(box, h('h3.mine', '갈림길!'), hint);
         center = { title: '갈림길! 길을 고르세요', sub: `남은 이동 ${pd.steps}칸 · 보드에서 깜빡이는 칸이 각 길의 첫 칸`, body: [h('div.opts.row-opts', ...pd.options.map((o, i) => optionButton(o, () => go({ type: 'branch', index: i })))), defaultNote(pd.options)] };
@@ -389,19 +483,19 @@ export class GameScreen {
   }
   renderDialog(c, pd) {
     if (!c || this.animating) { put(this.dialog); return; }
-    const me = P(this.g, this.me);
+    const me = c.actor || P(this.g, this.me);
     if (c.dock) { put(this.dialog, h('div.dock', { style: { '--pc': me.color } }, ...c.body)); return; }
     if (this.dialogMin === pd.id) {
       put(this.dialog, h('button.dlg-min', { style: { '--pc': me.color }, onclick: () => { this.dialogMin = null; this.renderAction(); } }, '▲ 선택 창 열기: ', c.title));
       return;
     }
-    put(this.dialog, h('div.dlg', { style: { '--pc': me.color } },
+    put(this.dialog, h('div.dlg' + (c.actor ? '.spectator' : ''), { style: { '--pc': me.color } },
       h('div.dlg-head', this.avatar(me), h('b', c.title), h('span.spacer'), h('button.small', { title: '창을 접고 보드 보기', onclick: () => { this.dialogMin = pd.id; this.renderAction(); } }, '보드 보기 ▼')),
       h('div.dlg-body',
         c.sub ? h('div.small', c.sub) : null,
         c.text ? h('p.dlg-text', c.text) : null,
         c.lines?.length ? h('div.lines', ...c.lines.map(l => lineChip(l))) : null,
-        ...c.body)));
+        ...(c.body || []))));
   }
 
   // ---------- 기록 (왼쪽) ----------
@@ -429,50 +523,10 @@ export class GameScreen {
   showDice(roll) {
     const p = P(this.g, roll.pid);
     const el = h('div.dice-pop', { style: { '--pc': p?.color } }, p ? h('div.dp-who', this.avatar(p, '.sm'), ` ${p.name}`) : null, h('div.die', String(roll.v)), h('div.small', roll.text));
-    this.bannerBox.append(el);
+    this.bannerBox.replaceChildren(el);
     sfx('dice');
     setTimeout(() => el.remove(), Math.max(1000, CARD_MS[this.speed] / 3));
   }
-  // 사건 결과 카드: 보드 위 가운데에 하나씩 크게 보여 준다
-  pushFeed(f) {
-    const mineOrBig = f.pid === this.me || ['joint', 'finish', 'over', 'system'].includes(f.kind);
-    const good = f.lines.some(l => /성공|승진|결혼|탄생|\+\d/.test(l)), bad = f.lines.some(l => /실패|실직|강등|강제 매각|신용 경고|대출|-\d/.test(l));
-    if (f.pid === this.me) sfx(bad && !good ? 'bad' : good ? 'good' : 'coin');
-    else sfx('coin');
-    if (f.kind === 'over') sfx('fanfare');
-    if (this.room.settings.skipRepeat && !mineOrBig) { toast(f.title, 'info', 2200); return; }
-    this.feedQueue.push({ f, mineOrBig, tone: bad && !good ? 'bad' : good && !bad ? 'good' : '' });
-    // 밀린 카드가 많으면 다른 사람의 오래된 소식부터 생략 (기록에는 남아 있음)
-    while (this.feedQueue.length > 4) {
-      const i = this.feedQueue.findIndex(x => !x.mineOrBig);
-      this.feedQueue.splice(i >= 0 ? i : 0, 1);
-    }
-    if (!this.showingFeed) this.nextFeed();
-  }
-  nextFeed() {
-    const item = this.feedQueue.shift();
-    if (!item) { this.showingFeed = null; return; }
-    const { f, mineOrBig, tone } = item;
-    const g = this.g;
-    const p = f.pid ? P(g, f.pid) : null;
-    const node = p ? g.board.nodes[this.board.disp[p.id] ?? p.pos] : null;
-    const icon = f.kind === 'joint' ? '🤝' : f.kind === 'finish' || f.kind === 'over' ? '🏁' : node ? SPACE_TYPES[node.type]?.icon : '📣';
-    let t1 = null;
-    const close = () => { if (this.showingFeed !== card) return; clearTimeout(t1); card.classList.add('out'); setTimeout(() => { card.remove(); this.nextFeed(); }, 250); };
-    const card = h('div.evt' + (f.pid === this.me ? '.mine' : '') + (tone ? '.' + tone : '') + `.k-${f.kind}`, { style: { '--pc': p?.color || '#8a6a3a' }, onclick: () => close(), title: '눌러서 닫기' },
-      h('div.evt-head', p ? this.avatar(p) : null, h('span.evt-who', p ? (p.id === this.me ? `${p.name} (나)` : p.name) : '알림'), h('span.evt-icon', icon)),
-      h('div.evt-title', f.title.replace(p ? `${p.name} — ` : '\u0000', '')),
-      f.text ? h('p.evt-text', f.text) : null,
-      f.lines.length ? h('div.lines', ...f.lines.map(l => lineChip(l))) : null,
-      this.feedQueue.length ? h('div.evt-more', `다음 소식 ${this.feedQueue.length}개 · 눌러서 넘기기`) : null);
-    this.showingFeed = card;
-    this.feedBox.replaceChildren(card);
-    if (p) { this.board.spotlight(p.id); setTimeout(() => this.board.spotlight(null), 1200); }
-    // 대기 중인 카드가 많으면 빨리 넘긴다
-    const ms = CARD_MS[this.speed] * (mineOrBig ? 1.3 : 1) * (this.feedQueue.length >= 2 ? 0.5 : 1) + f.lines.length * 250;
-    t1 = setTimeout(close, ms);
-  }
-
   showResults() {
     const g = this.g, r = g.results;
     if (!r) return;
@@ -504,6 +558,7 @@ function awaitingIds(g) {
   return pd.pid ? [pd.pid] : [];
 }
 function waitText(pd, mine) {
+  if (pd.kind === 'confirm') return mine ? '결과를 확인하고 차례를 넘겨요' : '차례 결과를 확인하는 중';
   if (mine) return { turn: '주사위를 굴릴 차례예요', branch: '갈림길에서 길을 골라요', choice: '사건에서 선택해요', reroll: '다시 굴릴지 골라요' }[pd.kind] || '';
   return { turn: '주사위를 굴리거나 카드를 쓰는 중', branch: '갈림길에서 길을 고르는 중', choice: '사건에서 선택하는 중', reroll: '다시 굴릴지 고민 중' }[pd.kind] || '';
 }
@@ -545,14 +600,15 @@ function cardControl(c, i, me, g, use) {
 
 const RULES_HTML = `
 <h2>규칙 요약</h2>
+<p>준비를 마치면 순서 주사위를 굴립니다. 높은 숫자부터 시작하며, 동점자만 다시 굴립니다.</p>
 <h3>한 턴의 순서</h3>
-<ol><li>(선택) 카드 사용·부채 상환 — 차례를 소비하지 않음</li><li>주사위(1~6) 굴리기 → 보정 적용 순서: 정조준(값 고정) → 질주 +2 → 의욕 +1 → 번아웃 −1 → 자동차 최소 2 → 최소 1</li>
+<ol><li>이동 전에 카드 사용·부채 상환을 할 수 있습니다. 성인기에는 생활 활동을 한 가지 고를 수 있습니다.</li><li>주사위(1~6) 굴리기 → 보정 적용 순서: 정조준(값 고정) → 질주 +2 → 의욕 +1 → 번아웃 −1 → 자동차 최소 2 → 최소 1</li>
 <li>한 칸씩 이동. 갈림길이면 길을 고름. <b>정지</b> 칸(관문·은퇴)을 만나면 남은 이동은 사라짐. 지나가는 월급날·용돈 칸은 그대로 받음</li>
-<li>멈춘 칸의 사건 → 선택 → 판정(주사위+능력 ≥ 목표, 성공 확률 % 표시) → 결과·상태 변화</li><li>상태 턴 수 감소 → 다음 플레이어</li></ol>
+<li>멈춘 칸의 사건 → 선택 → 판정(주사위+능력 ≥ 목표, 성공 확률 % 표시) → 결과·상태 변화</li><li>결과를 확인하고 차례를 넘깁니다.</li></ol>
 <h3>단계</h3><p>성장기 → 진로의 문(능력 보완) → 캠퍼스 길(학위·학자금) / 사회 길(아르바이트·현금) → 첫 직장 → 성인 전반 → 인생 중간 점검 → 성인 후반 → 은퇴</p>
 <h3>직업</h3><ul><li><b>조건형</b>: 능력 합이 기준 이상이면 월급날 자동 승진</li><li><b>도전형</b>: 직업 칸·월급날 도착 때 승진 판정, 연속 2회 실패 시 강등</li><li><b>축적형</b>: 성과(월급날 +1, 사건)로 승진</li>
 <li>전직: 교육비 ${JOB_CHANGE_COST}, 능력·카드·자산 유지, 직급 초기화, 성과 절반 이월. 실직하면 실업 급여(3회)와 재취업 사건, 아르바이트로 회복</li></ul>
-<h3>관계와 가족</h3><p>만남 → 호감도 2 이상 연애 → 호감도 3 이상 프러포즈(사교+호감도 판정) → 결혼(배우자 수입 +10, 정산 +100). 자녀는 양육비 6, 정산 +60.</p>
+<h3>관계와 가족</h3><p>성인기의 생활 선택에서 만남·데이트를 할 수 있습니다. 호감도 2 이상이면 연애하고, 3 이상이면 프러포즈할 수 있습니다. 결혼하면 월급날 배우자 수입 +10과 정산 +100을 받습니다. 자녀 한 명당 양육비 6과 정산 +60이 적용됩니다. 교육을 지원하면 장학금과 월급날 생활비 지원 경로가 열립니다.</p>
 <h3>돈</h3><ul><li>지출이 현금보다 크면 자동 대출. 부채 한도 = 200 + 직업 있으면 60×(직급+1) + 자산 평가액의 절반</li><li>한도 초과 시 가장 싼 자산부터 70%에 강제 매각 → 그래도 넘으면 신용 경고(구매 불가). 한도 아래로 내려오면 해제, "오뚝이" 업적</li><li>월급날 이자: 부채의 5%(올림)</li><li>"모두에게" 효과 총액 = 기준액 × min(상대 수, 3) → 12명이어도 과도하지 않음</li></ul>
 <h3>카드 (최대 5장, 넘치면 가장 오래된 카드 버림)</h3><p>같은 카드는 한 차례에 한 번. 다시 한 번은 판정 실패 직후, 생활 보험은 지출 사건에서 자동.</p>
 <h3>상태</h3><p>같은 상태는 겹치지 않고 남은 턴을 더 큰 값으로 갱신. 얻은 차례에는 줄지 않고 다음 차례부터 감소.</p>

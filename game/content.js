@@ -19,19 +19,19 @@ export const PLAYER_MARKS = ['●', '▲', '■', '◆', '★', '♥', '♣', '�
 // ---------- 직업 ----------
 // type: stable(조건 충족 승진) / challenge(판정 승진) / growth(성과 누적 승진) / free(아르바이트)
 export const JOBS = {
-  office: { name: '회사원', type: 'stable', req: { smart: 3, social: 2 }, ranks: ['사원', '대리', '과장', '부장', '임원'], salary: [30, 40, 54, 70, 95], promo: { stats: ['smart', 'social'], sum: [7, 9, 11, 13] }, desc: '두 능력 합이 기준을 넘으면 월급날 자동 승진. 구조조정 위험이 조금 있다.' },
+  office: { name: '회사원', type: 'stable', req: { smart: 3, social: 2 }, ranks: ['사원', '대리', '과장', '부장', '임원'], salary: [30, 39, 51, 65, 82], promo: { stats: ['smart', 'social'], sum: [7, 9, 11, 13] }, desc: '두 능력 합이 기준을 넘으면 월급날 자동 승진. 구조조정 위험이 조금 있다.' },
   civil: { name: '공무원', type: 'stable', req: { smart: 4 }, ranks: ['9급', '7급', '5급', '과장', '국장'], salary: [28, 34, 42, 52, 66], promo: { stats: ['smart'], sum: [5, 6, 8, 10] }, safe: true, desc: '실직하지 않는 안정 직업. 월급 상승폭은 작다.' },
-  nurse: { name: '간호사', type: 'stable', req: { body: 3, social: 3 }, ranks: ['신규', '일반', '책임', '수간호사', '간호부장'], salary: [32, 40, 50, 62, 76], promo: { stats: ['body', 'social'], sum: [8, 10, 12, 14] }, desc: '체력과 사교 합으로 승진. 야간 근무 사건이 있다.' },
+  nurse: { name: '간호사', type: 'stable', req: { body: 3, social: 3 }, ranks: ['신규', '일반', '책임', '수간호사', '간호부장'], salary: [33, 42, 53, 66, 81], promo: { stats: ['body', 'social'], sum: [7, 9, 11, 14] }, desc: '체력과 사교 합으로 승진. 야간 근무 사건이 있다.' },
   teacher: { name: '교사', type: 'stable', req: { smart: 4, social: 3 }, degree: true, ranks: ['신규 교사', '담임', '부장 교사', '교감', '교장'], salary: [30, 38, 48, 60, 74], promo: { stats: ['smart', 'social'], sum: [9, 11, 13, 15] }, safe: true, desc: '학위 필요. 실직하지 않으며 추억을 얻는 사건이 많다.' },
   athlete: { name: '운동선수', type: 'challenge', req: { body: 5 }, ranks: ['연습생', '2군', '1군', '스타', '전설'], salary: [15, 35, 70, 120, 180], promo: { stat: 'body', target: [6, 8, 10, 12] }, desc: '월급날·직업 칸에서 승진 도전(주사위+체력). 연속 2회 실패 시 강등. 성인 후반에 은퇴 사건.' },
   musician: { name: '뮤지션', type: 'challenge', req: { sense: 5 }, ranks: ['버스커', '인디', '데뷔', '히트메이커', '레전드'], salary: [12, 30, 65, 115, 170], promo: { stat: 'sense', target: [6, 8, 10, 12] }, desc: '감성으로 승진 도전. 대박과 슬럼프가 극단적이다.' },
-  founder: { name: '창업가', type: 'challenge', req: { social: 3, sense: 3 }, startCost: 100, ranks: ['예비 창업', '스타트업', '성장 기업', '중견 기업', '유니콘'], salary: [10, 30, 62, 110, 200], promo: { stat: 'social', target: [6, 8, 10, 12] }, desc: '시작 비용 100. 사교로 투자 유치 도전. 실패하면 폐업 위험.' },
-  chef: { name: '요리사', type: 'growth', req: { sense: 2, body: 2 }, ranks: ['보조', '라인 쿡', '수셰프', '셰프', '오너 셰프'], salary: [22, 32, 46, 62, 84], promo: { xp: [3, 6, 10, 15] }, desc: '월급날마다 성과 +1, 직업 사건으로 추가 성과. 성과가 쌓이면 승진.' },
+  founder: { name: '창업가', type: 'challenge', req: { social: 3, sense: 3 }, startCost: 60, ranks: ['예비 창업', '스타트업', '성장 기업', '중견 기업', '유니콘'], salary: [23, 39, 65, 107, 165], promo: { stat: 'social', target: [5, 7, 9, 12] }, desc: '시작 비용 60. 사교로 투자 유치 도전. 실패하면 폐업 위험.' },
+  chef: { name: '요리사', type: 'growth', req: { sense: 2, body: 2 }, ranks: ['보조', '라인 쿡', '수셰프', '셰프', '오너 셰프'], salary: [26, 36, 49, 66, 86], promo: { xp: [3, 6, 10, 15] }, desc: '월급날마다 성과 +1, 직업 사건으로 추가 성과. 성과가 쌓이면 승진.' },
   developer: { name: '개발자', type: 'growth', req: { smart: 3, sense: 2 }, ranks: ['주니어', '미들', '시니어', '리드', 'CTO'], salary: [30, 42, 56, 72, 92], promo: { xp: [3, 6, 10, 15] }, desc: '성과 누적형. 야근 사건이 번아웃을 부를 수 있다.' },
   researcher: { name: '연구원', type: 'growth', req: { smart: 5 }, degree: true, ranks: ['연구 보조', '연구원', '선임', '책임', '연구소장'], salary: [28, 38, 52, 70, 90], promo: { xp: [3, 6, 10, 15] }, desc: '학위 필요. 논문·특허 사건으로 큰 성과를 얻는다.' },
-  doctor: { name: '의사', type: 'stable', pack: 'extraJobs', req: { smart: 7 }, degree: true, ranks: ['인턴', '레지던트', '전문의', '과장', '병원장'], salary: [30, 45, 80, 110, 140], promo: { stats: ['smart', 'body'], sum: [10, 12, 14, 16] }, desc: '학위·지성 7 필요. 초반 월급은 낮고 후반이 높다.' },
-  creator: { name: '크리에이터', type: 'challenge', pack: 'extraJobs', req: { sense: 3, social: 3 }, ranks: ['새싹', '실버', '골드', '다이아', '레전드'], salary: [8, 25, 55, 100, 160], promo: { stat: 'sense', target: [6, 8, 10, 12] }, desc: '구독자 판정으로 승진. 논란 사건에 주의.' },
-  farmer: { name: '스마트팜 농부', type: 'growth', pack: 'extraJobs', req: { body: 3 }, ranks: ['귀농 1년차', '재배사', '농장주', '브랜드 농장', '농업 법인'], salary: [20, 30, 44, 60, 80], promo: { xp: [3, 6, 10, 15] }, desc: '날씨 사건에 영향. 수확 사건으로 성과가 크게 쌓인다.' },
+  doctor: { name: '의사', type: 'stable', pack: 'extraJobs', req: { smart: 7 }, degree: true, ranks: ['인턴', '레지던트', '전문의', '과장', '병원장'], salary: [30, 43, 68, 90, 115], promo: { stats: ['smart', 'body'], sum: [10, 12, 14, 16] }, desc: '학위·지성 7 필요. 초반 월급은 낮고 후반이 높다.' },
+  creator: { name: '크리에이터', type: 'challenge', pack: 'extraJobs', req: { sense: 3, social: 3 }, ranks: ['새싹', '실버', '골드', '다이아', '레전드'], salary: [23, 38, 62, 97, 145], promo: { stat: 'sense', target: [5, 7, 9, 12] }, desc: '구독자 판정으로 승진. 논란 사건에 주의.' },
+  farmer: { name: '스마트팜 농부', type: 'growth', pack: 'extraJobs', req: { body: 3 }, ranks: ['귀농 1년차', '재배사', '농장주', '브랜드 농장', '농업 법인'], salary: [25, 35, 48, 64, 83], promo: { xp: [3, 6, 10, 15] }, desc: '날씨 사건에 영향. 수확 사건으로 성과가 크게 쌓인다.' },
   parttime: { name: '아르바이트', type: 'free', req: {}, ranks: ['아르바이트'], salary: [18], promo: null, desc: '조건 없음. 언제든 재취업 기회로 이어지는 회복 경로.' },
 };
 export const JOB_TYPE_NAMES = { stable: '조건형', challenge: '도전형', growth: '축적형', free: '자유형' };
@@ -308,17 +308,43 @@ export const EVENTS = [
     { label: '바빠서 미룬다', effects: [{ affection: -1 }, { xp: 1 }] },
   ] },
   { id: 'a_love_propose', spaces: ['love', 'event'], stages: ['early', 'late'], when: { relation: ['dating'], minAffection: 3 }, weight: 3, title: '프러포즈의 순간', text: '{partner}님과 함께한 시간이 쌓였다. 마음을 전할까?', options: [
-    { label: '프러포즈한다', check: { stat: 'social', target: 7, affectionBonus: true }, success: [{ marry: true }], fail: [{ affection: -1 }], default: true },
+    { label: '프러포즈한다', check: { stat: 'social', target: 9, affectionBonus: true }, success: [{ marry: true }], fail: [{ affection: -1 }], default: true },
     { label: '조금 더 기다린다', effects: [{ affection: 1 }] },
   ] },
   { id: 'a_love_family', spaces: ['love'], stages: ['early', 'late'], when: { relation: ['married'] }, cooldown: 2, title: '가족 회의', text: '{partner}님과 앞으로의 가족 계획을 이야기했다.', options: [
-    { label: '아이를 갖자', effects: [{ child: 1 }], desc: '자녀 +1 (월급날마다 양육비 6, 정산 +60·추억)' },
+    { label: '아이를 갖자', when: { maxChildren: 1 }, effects: [{ child: 1 }], desc: '자녀 +1 (월급날마다 양육비 6, 정산 +60·추억)' },
     { label: '둘만의 여행', cost: 30, effects: [{ memory: 2 }], default: true },
     { label: '반려동물 입양', when: { noPet: true }, effects: [{ pet: true }, { memory: 1 }] },
   ] },
   { id: 'a_love_child', spaces: ['love', 'event'], stages: ['early', 'late'], when: { minChildren: 1 }, cooldown: 3, title: '아이의 성장', text: '{child}가 학교에서 상장을 받아 왔다!', options: [
     { label: '크게 축하한다', cost: 15, effects: [{ memory: 2 }], default: true },
     { label: '학원을 보낸다', cost: 30, effects: [{ childBoost: 1 }], desc: '자녀 정산 보너스 +30' },
+  ] },
+  { id: 'a_life_relationship', turnOnly: true, spaces: ['love'], stages: ['early', 'late'], when: { relation: ['single', 'met', 'dating'], notStatus: 'heartbreak' }, title: '만남과 데이트', text: '주말에 시간을 내서 인연을 쌓을 수 있다.', options: [
+    { label: '친구에게 소개를 부탁한다', when: { relation: ['single'] }, effects: [{ meet: true }, { affection: 1 }] },
+    { label: '함께 산책한다', when: { relation: ['met', 'dating'] }, effects: [{ affection: 1 }] },
+    { label: '공연을 함께 본다', when: { relation: ['met', 'dating'] }, cost: 24, effects: [{ affection: 2 }, { memory: 1 }] },
+    { label: '돌아가기', cancel: true, default: true },
+  ] },
+  { id: 'a_life_family', turnOnly: true, spaces: ['love'], stages: ['early', 'late'], when: { relation: ['married'] }, title: '가족과 함께', text: '{partner}님과 가족 계획을 세운다.', options: [
+    { label: '아이를 맞이한다', when: { maxChildren: 1 }, effects: [{ child: 1 }], desc: '자녀 +1 · 월급날 양육비 6 · 정산 +60' },
+    { label: '가족 사진을 찍는다', cost: 20, effects: [{ memory: 2 }, { affection: 1 }] },
+    { label: '둘이서 여행을 간다', cost: 45, effects: [{ memory: 3 }, { clearBad: true }] },
+    { label: '돌아가기', cancel: true, default: true },
+  ] },
+  { id: 'a_life_child', turnOnly: true, spaces: ['love'], stages: ['early', 'late'], when: { minChildren: 1 }, title: '자녀 교육과 진로', text: '{child}의 관심사를 키우고 학업과 진로를 도와준다.', options: [
+    { label: '교육비를 지원한다', cost: 35, when: { notFlag: 'childEducation' }, effects: [{ flag: 'childEducation' }, { childBoost: 2 }], desc: '자녀 정산 보너스 +60 · 장학금·취업 선택지 열림' },
+    { label: '장학금에 지원한다', when: { flag: 'childEducation', notFlag: 'childScholarship', childReady: true }, effects: [{ flag: 'childScholarship' }, { cash: 45 }] },
+    { label: '취업 준비를 돕는다', cost: 25, when: { flag: 'childEducation', notFlag: 'childWorking', childReady: true }, effects: [{ flag: 'childWorking' }, { memory: 1 }], desc: '이후 월급날마다 자녀 생활비 지원 +18 · 추억 +1' },
+    { label: '돌아가기', cancel: true, default: true },
+  ] },
+  { id: 'a_child_fair', spaces: ['love', 'event', 'lucky'], stages: ['early', 'late'], when: { minChildren: 1 }, once: true, title: '가족 벼룩시장', text: '{child}와 함께 안 쓰는 물건을 팔아 보기로 했다.', options: [
+    { label: '작은 가판대를 꾸민다', cost: 15, check: { stat: 'social', target: 8 }, success: [{ cash: 55 }, { memory: 1 }], fail: [{ cash: 15 }] },
+    { label: '함께 구경한다', effects: [{ memory: 1 }], default: true },
+  ] },
+  { id: 'a_child_recital', spaces: ['love', 'event'], stages: ['early', 'late'], when: { minChildren: 1 }, once: true, title: '첫 발표회', text: '{child}의 발표회에 초대받았다.', options: [
+    { label: '꽃을 준비하고 참석한다', cost: 20, effects: [{ memory: 2 }, { stat: { social: 1 } }] },
+    { label: '응원 편지를 보낸다', effects: [{ memory: 1 }], default: true },
   ] },
   { id: 'a_love_crisis', spaces: ['love', 'risk'], stages: ['early', 'late'], when: { relation: ['dating', 'married'] }, cooldown: 4, title: '서운함이 쌓였다', text: '{partner}님이 요즘 너무 바쁘다며 서운해한다.', options: [
     { label: '진심으로 대화', check: { stat: 'social', target: 6, affectionBonus: true }, success: [{ affection: 1 }, { memory: 1 }], fail: [{ affection: -2 }], default: true },

@@ -1,10 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, act, awaiting, defaultActionFor, P, shareAmounts, settlementFor, successProb, jobOptions, _internal } from '../game/engine.js';
+import { createGame, restoreGame, act, awaiting, defaultActionFor, P, shareAmounts, settlementFor, successProb, jobOptions, _internal } from '../game/engine.js';
 import { presetSettings, normalizeSettings, estimateMinutes } from '../game/settings.js';
 import { playToEnd } from './bot.js';
 
 const strip = (g) => JSON.stringify(g);
+const advance = g => {
+  const pid = awaiting(g)[0];
+  act(g, pid, defaultActionFor(g, pid));
+};
+function finishSetup(g) {
+  while (g.phase === 'prep') advance(g);
+}
 
 test('2/4/8/12명 × 모든 프리셋이 시작부터 정산까지 완주', () => {
   for (const preset of ['short', 'standard', 'long']) for (const n of [2, 4, 8, 12]) {
@@ -48,8 +55,7 @@ test('잘못된 차례·허용되지 않은 행동은 거부되고 상태가 바
   act(g, 'a', { type: 'simul', index: 0 });
   assert.throws(() => act(g, 'a', { type: 'simul', index: 1 }), /이미 선택/);
   act(g, 'b', { type: 'simul', index: 1 });
-  // 첫 직업 동시 선택
-  for (const id of ['a', 'b']) act(g, id, defaultActionFor(g, id));
+  finishSetup(g);
   const turnPid = g.pending.pid;
   const other = turnPid === 'a' ? 'b' : 'a';
   const before = strip(g);
@@ -62,7 +68,7 @@ test('잘못된 차례·허용되지 않은 행동은 거부되고 상태가 바
 
 test('필수 정지: 관문 칸에서 남은 이동이 사라지고 분기에서 선택을 기다림', () => {
   const g = createGame([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], presetSettings('standard'), 11);
-  act(g, 'a', { type: 'simul', index: 0 }); act(g, 'b', { type: 'simul', index: 0 });
+  finishSetup(g);
   const gate = Object.values(g.board.nodes).find(n => n.gate === 'career');
   const p = P(g, g.pending.pid);
   // 관문 2칸 앞에 세우고 6칸 이동 시도
@@ -77,6 +83,12 @@ test('필수 정지: 관문 칸에서 남은 이동이 사라지고 분기에서
   assert.equal(g.pending.src, 'career');
   assert.ok(g.pending.ctx.lines.some(l => l.includes('반드시 멈추는 칸')));
   act(g, p.id, { type: 'choose', index: 0 });
+  assert.equal(g.pending.kind, 'confirm');
+  assert.equal(g.pending.pid, p.id);
+  const other = g.players.find(x => x !== p);
+  assert.throws(() => act(g, other.id, { type: 'roll' }), /차례가 아닙니다/);
+  advance(g);
+  assert.equal(g.pending.pid, other.id);
   // 다음 차례에 이 플레이어가 움직이면 갈림길 선택 대기
   while (g.pending.pid !== p.id || g.pending.kind !== 'turn') act(g, awaiting(g)[0], defaultActionFor(g, awaiting(g)[0]));
   act(g, p.id, { type: 'roll' });
@@ -85,6 +97,91 @@ test('필수 정지: 관문 칸에서 남은 이동이 사라지고 분기에서
   act(g, p.id, { type: 'branch', index: 0 });
   assert.ok(p.degree, '캠퍼스 길 선택 시 학위');
   assert.ok(p.debt >= 120);
+});
+
+test('시작 순서는 입장 순서와 무관하고 동점자만 다시 굴림', () => {
+  const members = ['a', 'b', 'c', 'd'].map(id => ({ id, name: id }));
+  const g = createGame(members, presetSettings('short'), 3);
+  while (g.pending.sub !== 'order') advance(g);
+  for (const id of g.pending.who) act(g, id, defaultActionFor(g, id));
+  const rolls = Object.fromEntries(Object.entries(g.orderRolls).map(([id, values]) => [id, values[0]]));
+  const tied = members.filter(({ id }) => Object.values(rolls).filter(v => v === rolls[id]).length > 1).map(({ id }) => id);
+  assert.ok(tied.length > 0 && tied.length < members.length);
+  assert.deepEqual(g.pending.who.slice().sort(), tied);
+  finishSetup(g);
+  const expected = members.map(m => m.id).sort((a, b) => {
+    const rollsA = g.orderRolls[a], rollsB = g.orderRolls[b];
+    const different = rollsA.findIndex((v, i) => v !== rollsB[i]);
+    return rollsB[different] - rollsA[different];
+  });
+  assert.deepEqual(g.order, expected);
+  assert.equal(g.pending.pid, g.order[0]);
+});
+
+test('추천서로 아르바이트에 전직해도 유효한 직급과 월급을 받음', () => {
+  const g = createGame(['a', 'b'].map(id => ({ id, name: id })), presetSettings('short'), 4);
+  finishSetup(g);
+  const p = P(g, g.pending.pid);
+  p.job = { id: 'office', rank: 0, xp: 0, fails: 0 };
+  p.cards = ['referral'];
+  act(g, p.id, { type: 'useCard', index: 0 });
+  act(g, p.id, { type: 'choose', index: g.pending.options.findIndex(o => o.value === 'parttime') });
+  assert.equal(p.job.rank, 0);
+  p.job.rank = 1; // 이전 버전이 저장한 직급
+  restoreGame(g);
+  const before = p.cash;
+  _internal.payday(g, p, { lines: [] }, false);
+  assert.equal(p.cash, before + 18);
+});
+
+test('성인 초반 프러포즈와 자녀 교육·취업, 유료 활동은 주사위 전에 처리', () => {
+  const g = createGame(['a', 'b'].map(id => ({ id, name: id })), presetSettings('short'), 6);
+  finishSetup(g);
+  const p = P(g, g.pending.pid);
+  p.cash = 200;
+  p.stats.social = 10;
+  p.relation = { state: 'dating', partner: '친구', affection: 3 };
+  const choose = index => act(g, p.id, { type: 'choose', index });
+  const open = value => {
+    act(g, p.id, { type: 'life' });
+    choose(g.pending.options.findIndex(o => o.value === value));
+  };
+  const confirm = () => {
+    assert.equal(g.pending.kind, 'confirm');
+    advance(g);
+    assert.equal(g.pending.pid, p.id);
+    assert.equal(g.pending.canPlan, false);
+    // 이후 차례 시작을 재현하면서 월급 이외의 무작위 칸 효과를 배제한다.
+    p.turns++;
+    p.turnBuff = {};
+    g.pending.canPlan = true;
+  };
+  open('a_love_propose');
+  choose(0);
+  assert.equal(p.relation.state, 'married');
+  confirm();
+  open('a_life_family');
+  choose(0);
+  assert.equal(p.children.length, 1);
+  confirm();
+  open('a_life_child');
+  assert.ok(g.pending.options[2].disabled);
+  choose(0);
+  confirm();
+  open('a_life_child');
+  choose(1);
+  assert.ok(p.flags.childScholarship);
+  confirm();
+  open('a_life_child');
+  choose(2);
+  confirm();
+  const ctx = { lines: [] };
+  _internal.payday(g, p, ctx, false);
+  assert.ok(ctx.lines.some(line => line.includes('자녀 생활비 지원 18')));
+  const before = p.cash;
+  open('volunteer');
+  assert.equal(p.cash, before - 35);
+  confirm();
 });
 
 test('자금 부족 → 자동 대출 → 강제 매각 → 신용 경고 → 회복', () => {

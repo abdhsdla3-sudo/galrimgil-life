@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeSettings, defaultSettings } from '../game/settings.js';
-import { createGame, act, awaiting, defaultActionFor, GameError, SCHEMA_VERSION } from '../game/engine.js';
+import { createGame, restoreGame, act, awaiting, defaultActionFor, GameError, SCHEMA_VERSION } from '../game/engine.js';
 
 export const ROOM_SCHEMA = 1;
 const EXPIRE_MS = { lobby: 24 * 3600e3, playing: 30 * 24 * 3600e3, over: 3 * 24 * 3600e3 };
@@ -50,6 +50,7 @@ export class RoomManager {
         const room = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8'));
         if (room.schema !== ROOM_SCHEMA) { this.broken.set(id, `저장 형식 버전이 다릅니다 (저장 ${room.schema}, 서버 ${ROOM_SCHEMA}).`); continue; }
         if (room.game && room.game.schema !== SCHEMA_VERSION) { this.broken.set(id, `게임 데이터 버전이 다릅니다 (저장 ${room.game.schema}, 서버 ${SCHEMA_VERSION}).`); continue; }
+        restoreGame(room.game);
         for (const m of room.members) m.lastSeen = this.now(); // 재시작 직후 바로 '오프라인 처리'되지 않도록 유예
         this.rooms.set(id, room);
       } catch (e) {
@@ -101,7 +102,7 @@ export class RoomManager {
       id: room.id, version: room.version, status: room.status, capacity: room.capacity, locked: room.locked, hostId: room.hostId,
       settings: room.settings, notices: room.notices.slice(-10), deadline: room.deadline || null, now: this.now(),
       members: room.members.map(m => ({ id: m.id, name: m.name, ready: m.ready, online: this.isOnline(room, m.id), lastSeen: m.lastSeen, joinedAt: m.joinedAt })),
-      game, boardId: g ? room.boardId : null,
+      game, boardId: g ? room.boardId : null, chat: room.chat || [],
     };
   }
   board(room) { return room.game?.board || null; }
@@ -173,12 +174,13 @@ export class RoomManager {
     me.lastSeen = this.now();
     const aid = typeof body.actionId === 'string' ? body.actionId.slice(0, 64) : null;
     const seen = (room.processed[me.id] ||= []);
-    if (aid && seen.includes(aid)) return { ok: true, duplicate: true, version: room.version };
+    const withState = body.type === 'game' || body.type === 'chat';
+    if (aid && seen.includes(aid)) return { ok: true, duplicate: true, version: room.version, ...(withState && { state: this.publicView(room) }) };
     const res = this.dispatch(room, me, body);
     if (res.removed) return { ok: true, removed: true };
     if (aid) { seen.push(aid); if (seen.length > 40) seen.shift(); }
     this.commit(room);
-    return { ok: true, version: room.version, ...res };
+    return { ok: true, version: room.version, ...res, ...(withState && { state: this.publicView(room) }) };
   }
 
   dispatch(room, me, a) {
@@ -186,6 +188,17 @@ export class RoomManager {
     const host = () => { if (!isHost) err('방장만 할 수 있습니다.', 403); };
     const lobby = () => { if (room.status !== 'lobby') err('대기실에서만 할 수 있습니다.'); };
     switch (a.type) {
+      case 'chat': {
+        if (room.status === 'lobby') err('게임이 시작된 뒤 채팅할 수 있습니다.');
+        const message = typeof a.message === 'string' ? a.message.trim() : '';
+        if (!message || message.length > 120) err('메시지를 1~120자로 입력하세요.');
+        room.chat ||= [];
+        const last = room.chat.findLast(m => m.pid === me.id);
+        if (last && this.now() - last.at < 700) err('잠시 후 다시 보내세요.', 429);
+        room.chat.push({ seq: room.version + 1, at: this.now(), pid: me.id, name: me.name, message });
+        if (room.chat.length > 30) room.chat.shift();
+        return {};
+      }
       case 'ready': lobby(); me.ready = !!a.ready; return {};
       case 'settings': host(); lobby(); room.settings = normalizeSettings(a.settings); this.resetReady(room); return {};
       case 'capacity': {

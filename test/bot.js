@@ -28,6 +28,7 @@ export function botAction(g, pid, r, style = 'random') {
   if (pd.kind === 'branch') return { type: 'branch', index: Math.floor(r() * pd.options.length) };
   if (pd.kind === 'choice') return { type: 'choose', index: pickEnabled(pd.options) };
   if (pd.kind === 'reroll') return { type: 'reroll', use: r() < 0.7 };
+  if (pd.kind === 'confirm') return defaultActionFor(g, pid);
   if (pd.kind === 'simul') return { type: 'simul', index: pickEnabled(pd.perPlayer?.[pid] || pd.options) };
   return null;
 }

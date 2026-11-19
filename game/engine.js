@@ -4,15 +4,28 @@ import { JOBS, JOB_TYPE_NAMES, JOB_CHANGE_COST, ASSETS, SHOP_LIST, CARDS, HAND_L
   PARTNER_NAMES, CHILD_NAMES, TEMPERAMENTS, BACKGROUNDS, EVENTS, JOINT_EVENTS, PLAYER_COLORS, PLAYER_MARKS, SPACE_TYPES } from './content.js';
 import { normalizeSettings } from './settings.js';
 import { buildBoard } from './board.js';
-import { nextRandom, randInt, pick, weightedPick, shuffle } from './rng.js';
+import { randInt, pick, weightedPick } from './rng.js';
 
 export const SCHEMA_VERSION = 1;
 export class GameError extends Error {}
 const fail = (msg) => { throw new GameError(msg); };
 
+export function restoreGame(g) {
+  if (!g) return;
+  for (const p of g.players) {
+    if (p.job?.id === 'parttime') p.job.rank = 0;
+  }
+  if (g.pending.kind === 'turn' && g.pending.canPlan === undefined) refreshTurnCards(g);
+}
+
 const EVENT_MAP = Object.fromEntries(EVENTS.map(e => [e.id, e]));
 const FINISH_BONUS = [150, 100, 60];
 const MEMORY_VALUE = 15;
+const LIFE_SPENDING = {
+  lesson: { label: '맞춤 과외', cost: 45, effects: [{ statJob: 1 }] },
+  rest: { label: '하루 휴식', cost: 25, effects: [{ clearBad: true }, { memory: 1 }] },
+  volunteer: { label: '지역 행사 후원', cost: 35, effects: [{ stat: { social: 1 } }, { memory: 1 }] },
+};
 const ACHIEVEMENTS = {
   olympiad: ['올림피아드 수상', 30], medal: ['첫 메달', 30], president: ['반장 출신', 30], patent: ['특허 보유', 50],
   lastSeason: ['화려한 마지막 시즌', 50], recovered: ['오뚝이 인생(신용 회복)', 80], master: ['달인(능력 10 이상)', 40],
@@ -32,10 +45,10 @@ export function createGame(members, settingsIn, seed) {
   }));
   const g = {
     schema: SCHEMA_VERSION, seed: seed >>> 0, rng, settings, board, players,
-    order: shuffle(rng, players.map(p => p.id)), turnIdx: 0, round: 1, phase: 'prep',
+    order: players.map(p => p.id), turnIdx: 0, round: 1, phase: 'prep',
     pending: null, pendingSeq: 0, log: [], logSeq: 0, feed: [], feedSeq: 0, finishCount: 0, results: null, jointCount: 0,
   };
-  log(g, null, `게임 시작! 차례 순서: ${g.order.map(id => P(g, id).name).join(' → ')}`, 'system');
+  log(g, null, '게임 준비 시작', 'system');
   if (settings.startStage === 'growth') {
     setPending(g, { kind: 'simul', sub: 'temperament', title: '어린 시절 성향', text: '모두 동시에 고릅니다. 고른 능력이 +2 됩니다.', who: players.map(p => p.id), responses: {},
       options: TEMPERAMENTS.map((t, i) => ({ label: t.label, desc: t.desc, value: i, default: i === 0 })) });
@@ -249,10 +262,11 @@ function applyEffect(g, p, e, ctx) {
   }
   if (e.child) {
     const name = CHILD_NAMES[(p.children.length + g.players.indexOf(p)) % CHILD_NAMES.length];
+    if (!p.children.length) p.childReadyAt = p.turns + 2;
     p.children.push(name); ctx.lines.push(`아이 "${name}" 탄생! (월급날 양육비 6)`); record(p, `아이 ${name} 탄생`);
     p.memories += 1;
   }
-  if (e.childBoost) { p.childBoost += e.childBoost; ctx.lines.push('자녀 정산 보너스 +30'); }
+  if (e.childBoost) { p.childBoost += e.childBoost; ctx.lines.push(`자녀 정산 보너스 +${30 * e.childBoost}`); }
   if (e.pet && !p.pet) { p.pet = true; ctx.lines.push('반려동물 가족이 생겼다 (월급날 비용 2)'); record(p, '반려동물 입양'); }
   if (e.xp && p.job) { p.job.xp = Math.max(0, p.job.xp + e.xp); ctx.lines.push(`성과 ${fmt(e.xp)} → ${p.job.xp}`); checkGrowthPromo(g, p, ctx); }
   if (e.rankUp) rankChange(g, p, e.rankUp, ctx);
@@ -310,6 +324,7 @@ function payday(g, p, ctx, landed, label = '월급날') {
     p.unempPaydays++;
   }
   if (p.relation.state === 'married') { inc += 10; parts.push('배우자 수입 10'); }
+  if (p.flags.childWorking) { inc += 18; parts.push('자녀 생활비 지원 18'); }
   for (const a of p.assets) if (a.income) { inc += a.income; parts.push(`${a.name} ${a.income}`); }
   if (inc) money(g, p, inc, `${label}: ${parts.join(', ')}`, ctx);
   let cost = 0; const cp = [];
@@ -346,6 +361,7 @@ export function defaultActionFor(g, pid) {
     case 'branch': return { type: 'branch', index: 0 };
     case 'choice': return { type: 'choose', index: defaultIndex(pd.options) };
     case 'reroll': return { type: 'reroll', use: false };
+    case 'confirm': return { type: 'confirm' };
     case 'simul': return { type: 'simul', index: defaultIndex(pd.perPlayer?.[pid] || pd.options) };
   }
   return null;
@@ -364,8 +380,7 @@ function startTurn(g) {
       log(g, p.id, '뒤처진 플레이어 보정: 응원의 바람', 'event', ctx.lines);
     }
   }
-  setPending(g, { kind: 'turn', pid: p.id });
-  refreshTurnCards(g);
+  offerTurn(g, p);
 }
 function cardUsable(g, p, cid) {
   const c = CARDS[cid];
@@ -383,6 +398,12 @@ function refreshTurnCards(g) {
   const p = cur(g);
   g.pending.cards = p.cards.map(cid => ({ id: cid, reason: cardUsable(g, p, cid) }));
   g.pending.canRepay = p.debt > 0 && p.cash > 0;
+  g.pending.canPlan = stageOf(g, p) !== 'growth' && !p.turnBuff.life;
+}
+
+function offerTurn(g, p) {
+  setPending(g, { kind: 'turn', pid: p.id });
+  refreshTurnCards(g);
 }
 
 function endTurn(g) {
@@ -482,8 +503,12 @@ function finishAction(g, p, ctx, title, text = '') {
     const mode = ctx.after.jobSelect;
     return presentJobSelect(g, p, { lines: [], path: [], cause: '직업 선택', returnTo: ctx.returnTo }, mode);
   }
-  if (ctx.returnTo === 'turn') { setPending(g, { kind: 'turn', pid: p.id }); refreshTurnCards(g); return; }
-  endTurn(g);
+  confirmResult(g, p, ctx, title, text);
+}
+
+function confirmResult(g, p, ctx, title, text) {
+  const lines = [...ctx.lines, ...(ctx.jointLines || [])];
+  setPending(g, { kind: 'confirm', pid: p.id, title, text, lines, returnTo: ctx.returnTo });
 }
 
 // ---------------- 사건 선택/표시 ----------------
@@ -498,6 +523,8 @@ function whenOk(g, p, w = {}) {
   if (w.relation && !w.relation.includes(p.relation.state)) return false;
   if (w.minAffection && p.relation.affection < w.minAffection) return false;
   if (w.minChildren && p.children.length < w.minChildren) return false;
+  if (w.maxChildren !== undefined && p.children.length > w.maxChildren) return false;
+  if (w.childReady && p.turns < (p.childReadyAt ?? 0)) return false;
   if (w.noPet && p.pet) return false;
   if (w.notStatus && hasStatus(p, w.notStatus)) return false;
   if (w.notCredit && hasStatus(p, 'credit')) return false;
@@ -523,7 +550,7 @@ function pickEvent(g, p, space) {
     const e = EVENT_MAP[p.chain[i]];
     if (e && e.spaces.includes(space) && e.stages.includes(stage) && packOn(g, e.pack)) { p.chain.splice(i, 1); return e; }
   }
-  const list = EVENTS.filter(e => !e.chainOnly && eventAvailable(g, p, e, space, stage));
+  const list = EVENTS.filter(e => !e.chainOnly && !e.turnOnly && eventAvailable(g, p, e, space, stage));
   // 같은 사건이 너무 자주 나오지 않도록 최근 본 사건 가중치 감소
   return weightedPick(g.rng, list, e => (e.weight || 1) * (p.seen[e.id] !== undefined && p.turns - p.seen[e.id] < 6 ? 0.3 : 1));
 }
@@ -532,6 +559,10 @@ const fill = (s, p, ctx) => (s || '').replaceAll('{partner}', p.relation.partner
 function presentEvent(g, p, space, ctx) {
   const e = pickEvent(g, p, space);
   if (!e) { money(g, p, 10, '평범한 하루', ctx); return finishAction(g, p, ctx, `${p.name} — 평범한 하루`, '특별한 일 없이 하루가 지나갔다.'); }
+  return presentEventCard(g, p, e, ctx);
+}
+
+function presentEventCard(g, p, e, ctx) {
   p.seen[e.id] = p.turns;
   if (e.text.includes('{newPartner}')) ctx.newPartner = pick(g.rng, PARTNER_NAMES);
   ctx.cause = fill(e.title, p, ctx);
@@ -543,6 +574,22 @@ function presentEvent(g, p, space, ctx) {
   // 모든 선택지가 막히면(비용 부족 등) 진행 불능을 막는 대체 선택지
   if (options.every(o => o.disabled)) options.push({ label: '형편이 안 되어 넘어간다', value: options.length, desc: '변화 없음', default: true, fallback: true });
   setPending(g, { kind: 'choice', pid: p.id, src: 'event', eventId: e.id, title: `${p.name} — ${fill(e.title, p, ctx)}`, text: fill(e.text, p, ctx), options, ctx });
+}
+function presentLife(g, p) {
+  const options = [];
+  for (const [label, id] of [
+    ['만남·데이트', 'a_life_relationship'], ['프러포즈', 'a_love_propose'],
+    ['가족 계획', 'a_life_family'], ['자녀 교육·진로', 'a_life_child'],
+  ]) {
+    if (eventAvailable(g, p, EVENT_MAP[id], 'love', stageOf(g, p))) options.push({ label, value: id });
+  }
+  for (const [value, plan] of Object.entries(LIFE_SPENDING)) {
+    const disabled = p.cash < plan.cost ? '현금 부족' : value === 'lesson' && !p.job ? '직업 없음' : undefined;
+    options.push({ label: plan.label, value, cost: plan.cost, desc: effectSummary(plan.effects), disabled });
+  }
+  options.push({ label: '이동 준비로 돌아가기', value: 'skip', default: true });
+  setPending(g, { kind: 'choice', pid: p.id, src: 'life', title: '주사위 전 생활 선택', text: '이동 전에 한 가지 활동을 할 수 있습니다.',
+    options, ctx: { lines: [], path: [], cause: '생활 선택', returnTo: 'turn' } });
 }
 function describeOption(g, p, o, i) {
   const out = { label: o.label, value: i, desc: o.desc || effectSummary(o.effects), default: !!o.default };
@@ -567,6 +614,7 @@ export function effectSummary(effects) {
     if (e.meet) return '새 인연';
     if (e.marry) return '결혼 (식 비용 30)';
     if (e.child) return '자녀 +1';
+    if (e.childBoost) return `자녀 정산 보너스 +${30 * e.childBoost}`;
     if (e.pet) return '반려동물';
     if (e.rankUp) return '승진';
     if (e.rankDown) return '강등';
@@ -709,6 +757,7 @@ function resolveJoint(g, pd) {
   }
   feed(g, null, `공동 사건 결과: ${ev.title}`, '', lines, 'joint');
   log(g, null, `공동 사건 결과: ${ev.title}`, 'joint', lines);
+  return [ev.title, ...lines];
 }
 
 // ---------------- 종료/정산 ----------------
@@ -719,7 +768,7 @@ function finishPlayer(g, p, ctx) {
   record(p, `${p.finishOrder}번째로 은퇴`);
   feed(g, p.id, `${p.name} — 은퇴`, '이제부터 차례는 건너뛰지만, 공동 사건 참여와 다른 사람의 효과는 계속 받습니다.', ctx.lines.slice(), 'finish');
   log(g, p.id, `${p.name} 은퇴 (${p.finishOrder}번째)`, 'system', ctx.lines.slice());
-  endTurn(g);
+  confirmResult(g, p, ctx, `${p.name} — 은퇴`, '');
 }
 export function settlementFor(g, p, appraise) {
   const rows = [];
@@ -768,6 +817,9 @@ export function act(g, pid, a) {
   const p = P(g, pid);
   switch (pd.kind) {
     case 'turn': return actTurn(g, p, a);
+    case 'confirm':
+      if (a.type !== 'confirm') fail('차례를 넘기기 전에 결과를 확인하세요.');
+      return pd.returnTo === 'turn' ? offerTurn(g, p) : endTurn(g);
     case 'branch': {
       if (a.type !== 'branch') fail('갈림길을 선택해야 합니다.');
       const opt = pd.options[a.index];
@@ -810,6 +862,10 @@ export function act(g, pid, a) {
 
 function actTurn(g, p, a) {
   const pd = g.pending;
+  if (a.type === 'life') {
+    if (!pd.canPlan) fail('성인기에는 차례마다 생활 선택을 한 번 할 수 있습니다.');
+    return presentLife(g, p);
+  }
   if (a.type === 'roll') {
     const r = rollMove(g, p);
     const ctx = { lines: [`이동 ${r.v}칸 (${r.text})`], path: [], cause: '이동' };
@@ -853,7 +909,7 @@ function actTurn(g, p, a) {
     refreshTurnCards(g);
     return;
   }
-  fail('지금은 주사위 굴리기, 카드 사용, 부채 상환만 할 수 있습니다.');
+  fail('지금은 주사위 굴리기, 생활 선택, 카드 사용, 부채 상환만 할 수 있습니다.');
 }
 
 function runCheck(g, p, chk, ctx, title, text, isRetry = false) {
@@ -877,10 +933,24 @@ function resolveChoice(g, p, pd, idx) {
   ctx.lines.push(`선택: ${opt.label}`);
   const title = pd.title, text = pd.text;
   switch (pd.src) {
+    case 'life': {
+      if (opt.value === 'skip') return offerTurn(g, p);
+      const event = EVENT_MAP[opt.value];
+      if (event) return presentEventCard(g, p, event, ctx);
+      const plan = LIFE_SPENDING[opt.value];
+      p.turnBuff.life = true;
+      money(g, p, -plan.cost, plan.label, ctx);
+      applyEffects(g, p, plan.effects, ctx);
+      return finishAction(g, p, ctx, `${p.name} — ${plan.label}`);
+    }
     case 'event': {
       const e = EVENT_MAP[pd.eventId];
       const o = e.options[idx];
       if (opt.fallback || !o) return finishAction(g, p, ctx, title, text);
+      if (ctx.returnTo === 'turn') {
+        if (o.cancel) return offerTurn(g, p);
+        p.turnBuff.life = true;
+      }
       ctx.cause = title.replace(/^.*? — /, '');
       if (o.cost) money(g, p, -o.cost, '선택 비용', ctx);
       if (o.next) p.chain.push(o.next);
@@ -919,7 +989,8 @@ function resolveChoice(g, p, pd, idx) {
         let cost = changing && !p.turnBuff.referral ? JOB_CHANGE_COST : 0;
         if (j.startCost) cost += j.startCost;
         if (cost) money(g, p, -cost, changing ? '전직 교육비' : '창업 비용', ctx);
-        setJob(g, p, v, changing && p.turnBuff.referral ? 1 : 0, ctx, changing && p.turnBuff.referral ? '추천서로 2단계 시작' : '');
+        const rank = changing && p.turnBuff.referral && j.ranks.length > 1 ? 1 : 0;
+        setJob(g, p, v, rank, ctx, rank ? '추천서로 2단계 시작' : '');
       }
       ctx.after = null;
       return finishAction(g, p, ctx, title, text);
@@ -945,14 +1016,27 @@ function actSimul(g, pid, a) {
   const o = opts[a.index];
   if (!o) fail('없는 선택지입니다.');
   if (o.disabled) fail(`선택할 수 없습니다: ${o.disabled}`);
-  pd.responses[pid] = a.index;
+  pd.responses[pid] = pd.sub === 'order' ? randInt(g.rng, 1, 6) : a.index;
   if (awaiting(g).length) return;
+  if (pd.sub === 'order') {
+    const groups = pd.groups.flatMap(group => {
+      if (group.length === 1) return [group];
+      return [6, 5, 4, 3, 2, 1].map(die => group.filter(id => pd.responses[id] === die)).filter(group => group.length);
+    });
+    const result = pd.who.map(id => `${P(g, id).name} ${pd.responses[id]}`).join(' · ');
+    log(g, null, `순서 주사위 결과 — ${result}`, 'system');
+    for (const id of pd.who) (g.orderRolls[id] ||= []).push(pd.responses[id]);
+    if (groups.some(group => group.length > 1)) return presentOrder(g, groups, `${result} — 동점자만 다시 굴립니다.`);
+    g.order = groups.flat();
+    log(g, null, `차례 순서: ${g.order.map(id => P(g, id).name).join(' → ')}`, 'system');
+    g.phase = 'play';
+    return startTurn(g);
+  }
   // 모두 응답 → 차례 순서대로 적용
   if (pd.sub === 'temperament') {
     for (const id of g.order) { const p = P(g, id); const ctx = { lines: [] }; applyEffects(g, p, TEMPERAMENTS[pd.responses[id]].effects, ctx); record(p, `어린 시절 "${TEMPERAMENTS[pd.responses[id]].label}"`); log(g, id, `${p.name}: ${TEMPERAMENTS[pd.responses[id]].label}`, 'event', ctx.lines); }
     feed(g, null, '어린 시절 성향 결정', '', g.order.map(id => `${P(g, id).name}: ${TEMPERAMENTS[pd.responses[id]].label}`), 'system');
-    g.phase = 'play';
-    return startTurn(g);
+    return presentOrder(g, [g.order]);
   }
   if (pd.sub === 'background') {
     for (const id of g.order) {
@@ -977,14 +1061,20 @@ function actSimul(g, pid, a) {
       log(g, id, `${p.name} 첫 직업`, 'event', ctx.lines);
     }
     feed(g, null, '첫 직업 결정', '', lines, 'system');
-    g.phase = 'play';
-    return startTurn(g);
+    return presentOrder(g, [g.order]);
   }
   if (pd.sub === 'joint') {
-    resolveJoint(g, pd);
+    pd.ctx.jointLines = resolveJoint(g, pd);
     const p = P(g, pd.trigger);
     return finishAction(g, p, pd.ctx, `${p.name} — 모두의 광장`, '');
   }
+}
+
+function presentOrder(g, groups, text = '모두 주사위를 굴립니다. 높은 숫자부터 시작하고, 동점자끼리 다시 굴립니다.') {
+  g.orderRolls ||= {};
+  setPending(g, { kind: 'simul', sub: 'order', groups, title: '시작 순서 정하기', text,
+    who: groups.filter(group => group.length > 1).flat(), responses: {},
+    options: [{ label: '순서 주사위 굴리기', default: true }] });
 }
 
 // 테스트 전용 내부 함수 노출

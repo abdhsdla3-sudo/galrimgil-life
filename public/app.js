@@ -23,14 +23,13 @@ export async function api(path, body, method = body ? 'POST' : 'GET') {
   if (!res.ok || data.ok === false) { const e = new Error(data.error || `요청 실패 (${res.status})`); e.status = res.status; throw e; }
   return data;
 }
-let sending = false;
 export async function send(type, extra = {}) {
-  if (sending && type === 'game') return; // 중복 클릭 방지
-  sending = true;
+  const { roomId, token } = S;
   try {
-    return await api(`/api/rooms/${S.roomId}/act`, { type, actionId: crypto.randomUUID?.() || String(Math.random()), ...extra });
+    const result = await api(`/api/rooms/${roomId}/act`, { type, actionId: crypto.randomUUID?.() || String(Math.random()), ...extra });
+    if (result.state && S.roomId === roomId && S.token === token) receiveRoom(result.state);
+    return result;
   } catch (e) { toast(e.message, 'err'); if (e.status === 401) leaveToHome(); }
-  finally { sending = false; }
 }
 
 // ---------- 라우팅 ----------
@@ -118,7 +117,7 @@ export function settingsEditor(settings, editable, onChange, players) {
     h('div.field', h('b', '콘텐츠'), ...Object.entries(PACKS).map(([k, p]) => h('label.pack', h('input', { type: 'checkbox', checked: s.packs[k], disabled: dis, onchange: (e) => set({ packs: { ...s.packs, [k]: e.target.checked } }) }), h('span', h('b', p.name), ' — ', p.desc)))),
     h('div.field', h('b', '진행 속도 '),
       h('select', { disabled: dis, onchange: (e) => set({ speed: e.target.value }, true) }, ...Object.entries(SPEEDS).map(([k, v]) => h('option', { value: k, selected: s.speed === k }, v))),
-      h('label.inline', h('input', { type: 'checkbox', checked: s.skipRepeat, disabled: dis, onchange: (e) => set({ skipRepeat: e.target.checked }, true) }), '반복 연출 생략 (다른 사람의 평범한 결과는 작은 알림으로)'),
+      h('label.inline', h('input', { type: 'checkbox', checked: s.skipRepeat, disabled: dis, onchange: (e) => set({ skipRepeat: e.target.checked }, true) }), '다른 플레이어의 결과 미리보기 생략'),
       h('div.small', '연출 속도는 결과에 영향을 주지 않습니다. 각자 화면에서 따로 바꿀 수도 있습니다.')),
     h('div.field', h('b', '선택 시간 제한 '),
       h('select', { disabled: dis, onchange: (e) => set({ timeLimit: Number(e.target.value) }, true) }, ...TIME_LIMITS.map(t => h('option', { value: t, selected: s.timeLimit === t }, t ? `${t}초` : '제한 없음 (기본)'))),
@@ -181,16 +180,18 @@ async function renderJoin(id) {
 }
 
 // ---------- 실시간 연결 ----------
+function receiveRoom(room, close = () => S.es?.close()) {
+  if (room.id !== S.roomId || room.version < S.lastVersion) return;
+  setConn(true);
+  if (room.version === S.lastVersion && room.now < S.room?.now) return;
+  S.lastVersion = room.version;
+  S.room = room;
+  if (!room.members.some(m => m.id === S.memberId)) { clearSeat(S.roomId); close(); return renderMissing('이 방에서 내보내졌거나 자리가 없어졌습니다.'); }
+  render();
+}
+
 function connect() {
   S.es?.close();
-  const receive = (room, close) => {
-    setConn(true);
-    if (room.version < S.lastVersion) return; // 순서가 뒤바뀐 오래된 상태 무시
-    S.lastVersion = room.version;
-    S.room = room;
-    if (!room.members.some(m => m.id === S.memberId)) { clearSeat(S.roomId); close(); return renderMissing('이 방에서 내보내졌거나 자리가 없어졌습니다.'); }
-    render();
-  };
   if (document.querySelector('meta[name="room-sync"][content="poll"]')) {
     const id = S.roomId;
     let closed = false, timer;
@@ -202,7 +203,7 @@ function connect() {
           setConn(true);
           const previous = S.room;
           if (room.version !== previous?.version || room.members.some((m, i) => m.online !== previous.members[i]?.online)) {
-            receive(room, close);
+            receiveRoom(room, close);
           }
         }
       } catch (e) {
@@ -226,7 +227,7 @@ function connect() {
   let failures = 0;
   es.addEventListener('state', (ev) => {
     failures = 0;
-    receive(JSON.parse(ev.data), () => es.close());
+    receiveRoom(JSON.parse(ev.data), () => es.close());
   });
   es.onerror = () => {
     setConn(false);

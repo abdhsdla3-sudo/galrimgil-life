@@ -192,7 +192,7 @@ export class BoardView {
     const path = []; for (let x = to; x !== from; x = prev[x]) path.unshift(x);
     return path.length > 20 ? [to] : path;
   }
-  async animateTo(players, currentId, stepMs, onStep) {
+  async animateTo(players, currentId, stepMs, onStep, skip) {
     for (const p of players) {
       const from = this.disp[p.id] ?? p.pos;
       if (from === p.pos) continue;
@@ -200,19 +200,25 @@ export class BoardView {
       for (const [i, nid] of path.entries()) {
         this.disp[p.id] = nid;
         this.layoutPawns(players, currentId);
-        if (stepMs > 0) onStep?.(nid, path.length - 1 - i, p);
-        if (stepMs > 0) await new Promise(r => setTimeout(r, stepMs));
+        if (stepMs > 0 && !skip?.()) {
+          onStep?.(path.length - 1 - i, p);
+          await new Promise(r => setTimeout(r, stepMs));
+        }
       }
     }
     for (const p of players) this.disp[p.id] = p.pos;
     this.layoutPawns(players, currentId);
   }
-  scrollTo(nodeId) {
+  scrollTo(nodeId, behavior = 'smooth') {
     const n = this.board?.nodes[nodeId];
-    if (!n) return;
+    if (!n || this.zoom === 'all') return;
     const c = this.container;
-    const scale = this.svg.getBoundingClientRect().width / this.board.width || 1;
-    c.scrollTo({ top: this.svg.offsetTop + n.y * scale - c.clientHeight / 2, left: this.svg.offsetLeft + n.x * scale - c.clientWidth / 2, behavior: 'smooth' });
+    const board = this.svg.getBoundingClientRect(), view = c.getBoundingClientRect();
+    c.scrollTo({
+      top: c.scrollTop + board.top - view.top - c.clientTop + n.y * board.height / this.board.height - c.clientHeight / 2,
+      left: c.scrollLeft + board.left - view.left - c.clientLeft + n.x * board.width / this.board.width - c.clientWidth / 2,
+      behavior,
+    });
   }
   // from 다음 칸부터 가장 가까운 type 칸까지의 칸 수
   distanceTo(from, type) {
